@@ -1,43 +1,158 @@
 # PCB FPS
 
-Browser first-person deathmatch on a YJSP Battery Management System circuit board. The authoritative server uses Colyseus 0.18, the client uses Three.js, and the same movement and collision rules run on both sides.
+Browser first-person deathmatch on a real YJSP Battery Management System (BMS) PCB. The frontend uses Three.js and Vite; a Colyseus/Node.js server owns player movement, collisions, weapons, and multiplayer game state.
 
-## Local play
+**You can start playing without supplying any PCB files.** The game automatically uses the included prototype map until you import the BMS STEP assembly. You do not have to upload STEP, CSV, or PNG files to GitHub to play locally.
 
-Requires Node.js 22 or newer.
+## 1. Install prerequisites
+
+- **Node.js 22 or newer** (includes `npm`): https://nodejs.org/
+- **Git**: https://git-scm.com/downloads (or download the repository ZIP from GitHub).
+- **Chrome or another desktop browser with WebGL support**. The game uses mouse pointer lock and is intended for keyboard/mouse play.
+
+Open PowerShell or a terminal and check the installations:
+
+```sh
+node --version
+npm --version
+git --version
+```
+
+If `node` or `npm` is not recognized, install Node.js and reopen your terminal. If the Node.js version is below 22, update it first.
+
+## 2. Download the game
+
+For a **fresh clone**, run:
+
+```sh
+git clone https://github.com/prathamingale49/fpsgame.git
+cd fpsgame
+git switch feat/dev-player-scale
+```
+
+The `feat/dev-player-scale` branch contains the F4 slider from [PR #2](https://github.com/prathamingale49/fpsgame/pull/2). It is based on the gameplay-overhaul work from [PR #1](https://github.com/prathamingale49/fpsgame/pull/1). Until those PRs are merged, **the default `main` branch does not contain all of these features**.
+
+If you **already cloned** the game, open a terminal in its `fpsgame` directory and run:
+
+```sh
+git fetch origin
+git switch feat/dev-player-scale
+```
+
+Do not discard local changes to switch branches. Files generated under `assets/public/maps/` are ignored by Git and normally remain in place when switching branches.
+
+## 3. Install dependencies
+
+From inside `fpsgame`, run:
 
 ```sh
 npm ci
+```
+
+This installs the versions specified by `package-lock.json`, including the game server, Three.js, Vite, TypeScript, STEP importer, and test tools. **You do not need to install each library separately.** An internet connection is needed for the initial dependency download.
+
+## 4. Start the game
+
+For normal development:
+
+```sh
 npm run dev
 ```
 
-Open `http://localhost:5173`. Use **Create Room** and share the room link, or use **Play Now** to join an open room. Each room holds up to eight players. A match begins when two join. For internet play, run the server on a publicly reachable host and share its HTTPS URL; the WebSocket endpoint uses the same host and port in production.
+To test and adjust player size using the F4 debug slider, run this **instead**:
+
+```sh
+npm run dev:scale
+```
+
+Both commands start the frontend and server together; you do not need separate terminals. Leave the command running while playing, then press **Ctrl+C** in that terminal to stop it.
+
+| Address | Purpose |
+| --- | --- |
+| http://localhost:5173 | **Open this in your browser to play** (Vite frontend) |
+| http://localhost:2567/api/health | Server health and active map information (JSON) |
+
+In the browser, enter a name and click **Create Room** or **Play Now**. You can run around and test jumping with one person; a timed deathmatch starts when two players join. Use **Join Room** and the room code to connect a second player. Each room supports up to eight players.
+
+**No BMS files imported yet?** This is expected: the game shows the prototype circuit. Continue to step 5 to use the actual board.
 
 ### Development player-scale slider
 
-To try different miniature player sizes without recompiling, run `npm run dev:scale` instead of `npm run dev`. Join or create a room (one player is enough to test movement), then press **F4** to open the player-scale panel. Pointer lock releases so you can drag the height slider between **0.75 and 2.25 mm** in 0.05 mm steps. Release the slider to apply a size, then click **Close & Resume**. The panel displays the jump apex in millimeters; jump height remains approximately **1.63× player height** (matching the original jump in the fixed-step physics simulation), and collision radius, eye height, movement speed, rendered avatars, and weapon size scale proportionally. F3 shows the current authoritative height alongside the performance metrics.
+After starting with `npm run dev:scale` and joining a room, press **F4** to open the slider. Pointer lock releases so you can adjust the height between **0.75 and 2.25 mm** in 0.05 mm steps. Release the slider to apply the change, then click **Close & Resume**. On some laptops you may need **Fn+F4**.
+
+The panel shows the player height, jump apex, sprint speed, and hitbox width in millimeters. Jump height stays approximately **1.63× player height**, matching the original jump in the fixed-step physics simulation. Collision radius, eye height, movement speed, avatar, and weapon size change with it. Compare heights such as **1.00, 1.10, 1.25, and 1.80 mm** on the same map. **F3** displays the currently applied height alongside performance metrics.
 
 The scale is a server-authoritative **room-wide development setting**, not a selectable advantage for individual players. All clients are updated together so player collision and shooting agree. The normal `npm run dev` and production server leave the slider disabled. The flag can also be set explicitly on a non-production server with `PCB_DEV_SCALE=1`; never enable this on a public game server.
 
 Controls: WASD move, mouse aim, left click fire, Space jump, Shift sprint, R reload, Tab scoreboard, F3 performance overlay, Esc unlock pointer. The Solder Blaster has a 30-round magazine and collects reserve ammunition from solder spools around the map. Graphics quality, mouse sensitivity, and sound volume are available under Settings. Matches last five minutes, with unlimited respawns. When the timer ends, the highest kill count wins; ties favor fewer deaths.
 
-## Import the BMS assembly
+## 5. Import the real BMS PCB (optional)
 
-The private, generated BMS assets are intentionally excluded from Git. Place the STEP, pick-and-place CSV, and top artwork in a secure local folder and run:
+You need the STEP assembly to generate a real PCB map. The pick-and-place CSV and top artwork PNG are recommended for a more complete import, but the importer can also run with STEP alone.
+
+| Source file | Used for | Required? |
+| --- | --- | --- |
+| Assembly `.step` / `.stp` | Board and component 3D geometry | **Yes** |
+| Altium pick-and-place `.csv` | Component references and positions | Recommended |
+| Top artwork `.png` | Solder mask, traces, and silkscreen texture | Recommended |
+
+You can store these anywhere on your computer. The examples below use Windows paths, but the same commands work with macOS/Linux paths.
+
+Stop the running development server with **Ctrl+C**, then from the `fpsgame` folder run:
 
 ```sh
-npm run import:step -- "C:/path/assembly.step" "C:/path/pick-place.csv" "C:/path/top.png"
+npm run import:step -- "C:/path/to/bms.step" "C:/path/to/pick-place.csv" "C:/path/to/bmstop.png"
+```
+
+If you only have the STEP file:
+
+```sh
+npm run import:step -- "C:/path/to/bms.step"
+```
+
+The positional command arguments are `STEP [CSV] [PNG] [map-id]`, so include the CSV when supplying a PNG. The importer may take several minutes and use considerable RAM for a large assembly. It uses Open Cascade (`occt-import-js`) to convert STEP geometry to a Three.js-compatible model while preserving millimeter scale.
+
+For the default BMS map, the import creates:
+
+```text
+fpsgame/
+└── assets/
+    └── public/
+        └── maps/
+            ├── bms.json                  # Map dimensions, collisions, spawns
+            ├── bms.glb                   # Rendered 3D PCB assembly
+            ├── bms-top.png               # Recolored PCB artwork (if supplied)
+            └── bms-top-original.png      # Original artwork copy (if supplied)
+```
+
+Check the result:
+
+```sh
+npm run audit:map -- bms
+```
+
+Then **restart** with `npm run dev:scale` (or `npm run dev`) and refresh http://localhost:5173. The server automatically selects `assets/public/maps/bms.json` when it exists. Check http://localhost:2567/api/health: its `map` field should be `bms` instead of `test`.
+
+If you already imported the BMS previously, **do not import it again**. As long as `bms.json` and `bms.glb` are still in `assets/public/maps/` (plus `bms-top.png` if the JSON references it), just start the game.
+
+The importer builds simplified collision boxes for top-side components at least 0.8 mm wide and high, and generates safe spawn points. It preserves bottom-side geometry visually, but the underside is **not yet a playable arena**. Collision approximation can make angled components feel wider than they look.
+
+`bmstop.png` is recolored from Altium layer colors to green solder mask, copper and light silkscreen without moving pixels, then mapped onto the board at its real aspect ratio. The board model retains STEP component placement and approximate material categories.
+
+The STEP assembly also includes a BeagleBone Black model (`Q14`) that spans roughly 90 × 55 mm over the BMS. It is rendered translucent and omitted from collisions so the actual BMS surface remains visible and navigable; its CAD position is preserved.
+
+## 6. Build and run the production version locally
+
+Development mode runs the Vite frontend on port 5173 and the Node.js server on 2567. To test the bundled version that would be deployed, **stop the development server**, then run:
+
+```sh
 npm run build
 npm start
 ```
 
-The importer uses Open Cascade via `occt-import-js` to tessellate STEP solids, preserves their real millimeter coordinates, rotates STEP Z-up to Three.js Y-up, centers the board, combines solids by material into a GLB, and writes `assets/public/maps/bms.json`. The map contains simplified collision boxes for top-side components at least 0.8 mm across and 0.8 mm high, distributed safe spawn points in a connected open area, and component designators matched to Altium CSV placements. The model and map are used automatically on the next server start. Other board designs can use the same pipeline and JSON/GLB contract. The first import can take several minutes and needs ample RAM.
+Open **http://localhost:2567** instead of 5173. The Node.js server serves both the compiled frontend and multiplayer backend on one port. If you want the BMS to appear in this version, import it **before** `npm run build`, since Vite copies the map assets into the compiled frontend during the build. `npm start` does not enable the scale slider.
 
-`bmstop.png` is recolored from Altium's layer colors to green solder mask, copper and light silkscreen without moving pixels, then mapped onto the board at its real aspect ratio. The original image is kept alongside it locally. The board model retains STEP component placement and approximate material categories. Bottom-side components are rendered but excluded from top-side collisions. This is a game collision approximation; run `npm run audit:map` to check generated boxes, CSV alignment and spawns when changing board designs.
-
-The STEP assembly also includes a BeagleBone Black model (`Q14`) that spans roughly 90 × 55 mm over the BMS. It is rendered translucent and omitted from collisions so the actual BMS surface remains visible and navigable; its CAD position is preserved.
-
-## Verification
+## 7. Run tests (optional)
 
 ```sh
 npm run build
@@ -46,20 +161,36 @@ npm run test:browser
 npm run test:movement
 ```
 
-`npm test` checks fixed-step movement, jumps, boundaries, component shot blocking, ordered and out-of-order input delivery, server-controlled ammunition and pickups, and two real Colyseus SDK clients joining, moving, shooting, taking damage, dying, respawning, disconnecting, and completing a match. `test:browser` checks room joining, WebGL rendering, reconnection, pointer lock, basic movement, graphics settings, and F3 telemetry. `test:movement` uses two independent browser clients and the real server to hold W through multiple authoritative snapshots, check for backward corrections and stopping after release, and repeat at 0, 50, 100, and 200 ms simulated latency with a reduced render rate. It also runs on the BMS when the private map assets are present. Browser tests require Chrome at `C:/Program Files/Google/Chrome/Application/chrome.exe` and write diagnostics to `artifacts/`. Before/after frame and collision measurements are in [docs/performance.md](docs/performance.md).
+`npm run build` checks TypeScript and builds frontend/backend. `npm test` runs fixed-step physics, scaled jump and hitbox tests, and real two-client Colyseus multiplayer tests. `test:browser` exercises WebGL, joining, reconnection, settings, movement and F3. `test:movement` checks movement prediction and reconciliation at various network delays, and includes the BMS if its files are available. **Browser tests currently expect Chrome at `C:/Program Files/Google/Chrome/Application/chrome.exe`**, so they may require script changes on macOS/Linux. Screenshots and test diagnostics go into the ignored `artifacts/` folder. Performance methodology is in [docs/performance.md](docs/performance.md).
 
-## Hosting
+## 8. Put the game online (later)
 
-The Dockerfile builds the client and server into one service on port 2567. Use a host that supports persistent WebSockets and TLS at its edge. Set the host's public route to port 2567. Keep one server instance unless you configure shared Colyseus presence and matchmaking. Do not publish the generated `assets/public/maps/` files or deploy this proprietary board without the owner's approval.
+The included Dockerfile builds the client and server into one Node.js service on port **2567**. Use a host supporting persistent WebSocket connections (such as Railway). Configure HTTPS/WSS at the public edge, point traffic to port 2567, and initially use **one server instance**. Additional instances require shared Colyseus presence and room routing.
 
 ```sh
 docker build -t pcb-fps .
 docker run --rm -p 2567:2567 pcb-fps
 ```
 
-The code repository can be shared without the proprietary board assets. A fresh checkout then uses the prototype circuit until the private assembly is imported. `GET /api/health` reports the active map.
+**For local play, there is no need to upload any PCB files to GitHub.** By default `.gitignore` excludes `assets/public/maps/*` except `.gitkeep`, so generated BMS maps are not committed automatically. If you later deploy directly from GitHub and want the BMS online, the deployment build must receive `bms.json`, `bms.glb`, and (if referenced) `bms-top.png`—for example by intentionally committing those generated assets or providing them in the build environment. **The original STEP and pick-and-place CSV are not required at runtime.** Check large `.glb` sizes before committing to GitHub; large binaries may need a different distribution method.
 
 To add another board, pass a fourth import argument such as `new-board`, run `npm run audit:map -- new-board`, and set `PCB_MAP_ID=new-board` for the server. The same STEP, CSV, image, GLB, and collision pipeline is used. On PowerShell, set the environment variable with `$env:PCB_MAP_ID='new-board'` before `npm start`.
+
+## Troubleshooting
+
+| Problem | What to check |
+| --- | --- |
+| `node` or `npm` not recognized | Install Node.js 22+, close and reopen the terminal, then run `node --version`. |
+| Dependency install fails | Run `npm ci` **inside** `fpsgame` where `package-lock.json` exists. Check your network connection and Node.js version. |
+| Browser cannot connect or says server version differs | Both server and frontend must be started from the **same branch**. Stop old instances, run `npm run dev:scale` again, then hard-refresh the page. |
+| `localhost:5173` does not open | Leave `npm run dev` or `npm run dev:scale` running and check its terminal output for an error or port conflict. |
+| F4 slider does not appear | Use branch `feat/dev-player-scale`, start with `npm run dev:scale`, and **join a room first**. Check `/api/health` for `"devScaleEnabled":true`. |
+| BMS does not appear | Verify `assets/public/maps/bms.json` and `bms.glb` exist; restart the server and confirm `/api/health` says `"map":"bms"`. |
+| PCB has no artwork | Supply the optional PNG at import time and verify `bms-top.png` exists. |
+| STEP import is slow or fails | Full assemblies can need considerable memory. Verify the file is a real STEP assembly, not just a PCB outline. |
+| Multiplayer lags or snaps backward | Press **F3** to view FPS, ping, input backlog and correction. Test with two clients and the same server build; reduce graphics quality under Settings if rendering is slow. |
+
+For Windows PowerShell, all the commands above work as written, including paths with forward slashes inside quotes. For macOS/Linux, replace the example Windows file paths with actual local paths. The game files and scripts must be run from the `fpsgame` repository root.
 
 ## Architecture and limitations
 
