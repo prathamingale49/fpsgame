@@ -5,6 +5,7 @@
   "type": "module",
   "scripts": {
     "dev": "concurrently -k \"tsx watch server/main.ts\" \"vite --host 0.0.0.0\"",
+    "dev:scale": "concurrently -k \"tsx watch tools/dev-scale-server.ts\" \"vite --host 0.0.0.0\"",
     "build": "tsc --noEmit && vite build && esbuild server/main.ts --bundle --platform=node --format=esm --packages=external --outfile=dist-server/main.js",
     "start": "node dist-server/main.js",
     "test": "vitest run --config vitest.config.ts",

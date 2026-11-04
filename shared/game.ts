@@ -3,6 +3,24 @@ export const MOVEMENT_PROTOCOL = 3;
 export const MATCH_SECONDS = 300;
 export const RESPAWN_SECONDS = 2.5;
 export const PLAYER = { radius: .36, height: 1.8, eye: 1.54, walkSpeed: 14, sprintSpeed: 20, jumpSpeed: 13.5, gravity: 30, mantleSpeed: 32, mantleReach: 7, fallDeathDepth: 18 } as const;
+export type PlayerTuning = { radius: number; height: number; eye: number; walkSpeed: number; sprintSpeed: number; jumpSpeed: number; gravity: number; mantleSpeed: number; mantleReach: number; fallDeathDepth: number };
+export const DEV_SCALE = { min: .75, max: 2.25, step: .05 } as const;
+// Jump apex in the fixed-step integrator, accounting for velocity being decremented before movement.
+// The original 1.8 mm jump is preserved and every size reaches the same fraction of its own height.
+export const JUMP_HEIGHT_RATIO = (PLAYER.jumpSpeed - PLAYER.gravity * TICK / 2) ** 2 / (2 * PLAYER.gravity * PLAYER.height);
+export function validDevHeight(value: unknown): number | null {
+  if (typeof value !== 'number' || !Number.isFinite(value) || value < DEV_SCALE.min || value > DEV_SCALE.max) return null;
+  return Number((Math.round(value / DEV_SCALE.step) * DEV_SCALE.step).toFixed(2));
+}
+export function tuningForHeight(height: number): PlayerTuning {
+  const scale = height / PLAYER.height;
+  return {
+    radius: PLAYER.radius * scale, height, eye: PLAYER.eye * scale,
+    walkSpeed: PLAYER.walkSpeed * scale, sprintSpeed: PLAYER.sprintSpeed * scale,
+    jumpSpeed: Math.sqrt(2 * PLAYER.gravity * JUMP_HEIGHT_RATIO * height) + PLAYER.gravity * TICK / 2, gravity: PLAYER.gravity,
+    mantleSpeed: PLAYER.mantleSpeed * scale, mantleReach: PLAYER.mantleReach * scale, fallDeathDepth: PLAYER.fallDeathDepth,
+  };
+}
 export const PLAYER_RADIUS = PLAYER.radius;
 export const PLAYER_HEIGHT = PLAYER.height;
 export const EYE_HEIGHT = PLAYER.eye;
@@ -64,76 +82,76 @@ function nearby(map: MapData, x0: number, z0: number, x1: number, z1: number): B
   index.queries.set(queryKey, boxes); return boxes;
 }
 export type MotionStats = { collisionChecks: number };
-function touches(x: number, z: number, box: Box): boolean {
+function touches(x: number, z: number, box: Box, radius: number): boolean {
   const dx = Math.max(box.min[0] - x, 0, x - box.max[0]);
   const dz = Math.max(box.min[2] - z, 0, z - box.max[2]);
-  return dx * dx + dz * dz < PLAYER_RADIUS * PLAYER_RADIUS;
+  return dx * dx + dz * dz < radius * radius;
 }
-function overlaps(x: number, y: number, z: number, box: Box, stats?: MotionStats): boolean {
+function overlaps(x: number, y: number, z: number, box: Box, tuning: PlayerTuning, stats?: MotionStats): boolean {
   if (stats) stats.collisionChecks++;
-  return touches(x, z, box) && y < box.max[1] - .01 && y + PLAYER_HEIGHT > box.min[1] + .01;
+  return touches(x, z, box, tuning.radius) && y < box.max[1] - .01 && y + tuning.height > box.min[1] + .01;
 }
 
-export function stepMotion(previous: Motion, input: Input, map: MapData, dt = TICK, stats?: MotionStats): Motion {
+export function stepMotion(previous: Motion, input: Input, map: MapData, dt = TICK, stats?: MotionStats, tuning: PlayerTuning = PLAYER): Motion {
   const out = { ...previous };
   const f = input.forward, s = input.strafe;
   const len = Math.max(1, Math.hypot(f, s));
-  const speed = input.sprint ? PLAYER.sprintSpeed : PLAYER.walkSpeed;
+  const speed = input.sprint ? tuning.sprintSpeed : tuning.walkSpeed;
   const dx = (-Math.sin(input.yaw) * f + Math.cos(input.yaw) * s) / len * speed * dt;
   const dz = (-Math.cos(input.yaw) * f - Math.sin(input.yaw) * s) / len * speed * dt;
-  if (input.jump && !out.jumpHeld && out.grounded) { out.vy = PLAYER.jumpSpeed; out.grounded = false; }
+  if (input.jump && !out.jumpHeld && out.grounded) { out.vy = tuning.jumpSpeed; out.grounded = false; }
   out.jumpHeld = input.jump;
   const oldY = out.y;
   const mantleTop = out.mantleTarget;
   if (out.mantleTarget > 0) {
-    out.y = Math.min(out.mantleTarget, out.y + PLAYER.mantleSpeed * dt);
+    out.y = Math.min(out.mantleTarget, out.y + tuning.mantleSpeed * dt);
     out.vy = 0;
     out.grounded = out.y >= out.mantleTarget;
     if (out.grounded) out.mantleTarget = 0;
   } else {
-    out.vy -= PLAYER.gravity * dt;
+    out.vy -= tuning.gravity * dt;
     out.y += out.vy * dt;
     out.grounded = false;
     const overBoard = Math.abs(out.x) <= map.width / 2 && Math.abs(out.z) <= map.depth / 2;
     if (overBoard && oldY >= map.ground - .02 && out.y <= map.ground) { out.y = map.ground; out.vy = 0; out.grounded = true; }
   }
-  const candidates = nearby(map, Math.min(out.x, out.x + dx) - PLAYER_RADIUS, Math.min(out.z, out.z + dz) - PLAYER_RADIUS, Math.max(out.x, out.x + dx) + PLAYER_RADIUS, Math.max(out.z, out.z + dz) + PLAYER_RADIUS);
+  const candidates = nearby(map, Math.min(out.x, out.x + dx) - tuning.radius, Math.min(out.z, out.z + dz) - tuning.radius, Math.max(out.x, out.x + dx) + tuning.radius, Math.max(out.z, out.z + dz) + tuning.radius);
   if (mantleTop > 0 && out.mantleTarget === 0) {
     const ledge = candidates.find(b => b.climbable && Math.abs(b.max[1] - mantleTop) < .01
-      && Math.hypot(clamp(out.x, b.min[0] + .1, b.max[0] - .1) - out.x, clamp(out.z, b.min[2] + .1, b.max[2] - .1) - out.z) < PLAYER_RADIUS + .3);
+      && Math.hypot(clamp(out.x, b.min[0] + .1, b.max[0] - .1) - out.x, clamp(out.z, b.min[2] + .1, b.max[2] - .1) - out.z) < tuning.radius + .3);
     if (ledge) {
       const pulledX = clamp(out.x, ledge.min[0] + .1, ledge.max[0] - .1);
       const pulledZ = clamp(out.z, ledge.min[2] + .1, ledge.max[2] - .1);
-      const pullCandidates = nearby(map, Math.min(out.x, pulledX) - PLAYER_RADIUS, Math.min(out.z, pulledZ) - PLAYER_RADIUS,
-        Math.max(out.x, pulledX) + PLAYER_RADIUS, Math.max(out.z, pulledZ) + PLAYER_RADIUS);
-      if (Math.hypot(pulledX - out.x, pulledZ - out.z) < PLAYER_RADIUS + .3
-        && !pullCandidates.some(b => b !== ledge && overlaps(pulledX, out.y, pulledZ, b, stats))) { out.x = pulledX; out.z = pulledZ; }
+      const pullCandidates = nearby(map, Math.min(out.x, pulledX) - tuning.radius, Math.min(out.z, pulledZ) - tuning.radius,
+        Math.max(out.x, pulledX) + tuning.radius, Math.max(out.z, pulledZ) + tuning.radius);
+      if (Math.hypot(pulledX - out.x, pulledZ - out.z) < tuning.radius + .3
+        && !pullCandidates.some(b => b !== ledge && overlaps(pulledX, out.y, pulledZ, b, tuning, stats))) { out.x = pulledX; out.z = pulledZ; }
     }
   }
   for (const box of candidates) {
     if (stats) stats.collisionChecks++;
     if (out.vy <= 0 && oldY >= box.max[1] - 0.02 && out.y <= box.max[1]
-      && touches(out.x, out.z, box)) {
+      && touches(out.x, out.z, box, tuning.radius)) {
       out.y = box.max[1]; out.vy = 0; out.grounded = true;
     }
   }
   const tryX = out.x + dx;
   const tryZ = out.z + dz;
   if (input.jump && !out.grounded && out.mantleTarget === 0 && out.y >= map.ground + 1 && out.vy <= 2) {
-    const ledge = candidates.find(b => b.climbable && b.max[1] > out.y + .2 && b.max[1] - out.y <= PLAYER.mantleReach
-      && (touches(tryX, tryZ, b) || touches(tryX, out.z, b) || touches(out.x, tryZ, b))
-      && !candidates.some(other => other !== b && overlaps(out.x, b.max[1], out.z, other, stats)));
+    const ledge = candidates.find(b => b.climbable && b.max[1] > out.y + .2 && b.max[1] - out.y <= tuning.mantleReach
+      && (touches(tryX, tryZ, b, tuning.radius) || touches(tryX, out.z, b, tuning.radius) || touches(out.x, tryZ, b, tuning.radius))
+      && !candidates.some(other => other !== b && overlaps(out.x, b.max[1], out.z, other, tuning, stats)));
     if (ledge) { out.mantleTarget = ledge.max[1]; out.vy = 0; }
   }
-  if (!candidates.some(b => overlaps(tryX, out.y, out.z, b, stats))) out.x = tryX;
-  if (!candidates.some(b => overlaps(out.x, out.y, tryZ, b, stats))) out.z = tryZ;
-  if (out.y > oldY && out.mantleTarget === 0 && candidates.some(b => overlaps(out.x, out.y, out.z, b, stats))) { out.y = oldY; out.vy = 0; }
+  if (!candidates.some(b => overlaps(tryX, out.y, out.z, b, tuning, stats))) out.x = tryX;
+  if (!candidates.some(b => overlaps(out.x, out.y, tryZ, b, tuning, stats))) out.z = tryZ;
+  if (out.y > oldY && out.mantleTarget === 0 && candidates.some(b => overlaps(out.x, out.y, out.z, b, tuning, stats))) { out.y = oldY; out.vy = 0; }
   return out;
 }
 
 export type Ray = { origin: [number, number, number]; direction: [number, number, number] };
-export function aimRay(x: number, y: number, z: number, yaw: number, pitch: number): Ray {
-  return { origin: [x, y + EYE_HEIGHT, z], direction: [-Math.sin(yaw) * Math.cos(pitch), Math.sin(pitch), -Math.cos(yaw) * Math.cos(pitch)] };
+export function aimRay(x: number, y: number, z: number, yaw: number, pitch: number, tuning: PlayerTuning = PLAYER): Ray {
+  return { origin: [x, y + tuning.eye, z], direction: [-Math.sin(yaw) * Math.cos(pitch), Math.sin(pitch), -Math.cos(yaw) * Math.cos(pitch)] };
 }
 export function rayBox(ray: Ray, box: Box): number {
   let lo = 0, hi: number = WEAPON.range;
@@ -147,16 +165,16 @@ export function rayBox(ray: Ray, box: Box): number {
   }
   return lo;
 }
-export function rayPlayer(ray: Ray, player: Motion): number {
-  const box: Box = { min: [player.x - PLAYER_RADIUS, player.y, player.z - PLAYER_RADIUS], max: [player.x + PLAYER_RADIUS, player.y + PLAYER_HEIGHT, player.z + PLAYER_RADIUS] };
+export function rayPlayer(ray: Ray, player: Motion, tuning: PlayerTuning = PLAYER): number {
+  const box: Box = { min: [player.x - tuning.radius, player.y, player.z - tuning.radius], max: [player.x + tuning.radius, player.y + tuning.height, player.z + tuning.radius] };
   return rayBox(ray, box);
 }
-export function hitscan(ray: Ray, map: MapData, players: Iterable<[string, Motion]>, shooterId: string): { target?: string; distance: number } {
+export function hitscan(ray: Ray, map: MapData, players: Iterable<[string, Motion]>, shooterId: string, tuning: PlayerTuning = PLAYER): { target?: string; distance: number } {
   let distance: number = WEAPON.range, target: string | undefined;
   for (const box of map.boxes) distance = Math.min(distance, rayBox(ray, box));
   for (const [id, player] of players) {
     if (id === shooterId) continue;
-    const hit = rayPlayer(ray, player);
+    const hit = rayPlayer(ray, player, tuning);
     if (hit < distance) { distance = hit; target = id; }
   }
   return { target, distance };

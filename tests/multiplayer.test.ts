@@ -3,7 +3,7 @@ import { Client } from '@colyseus/sdk';
 import { spawn, type ChildProcess } from 'node:child_process';
 import { setTimeout as delay } from 'node:timers/promises';
 import type { MatchState } from '../server/state';
-import { initialMotion, MOVEMENT_PROTOCOL, PLAYER, stepMotion, testMap, TICK, type Input, type Motion } from '../shared/game';
+import { initialMotion, MOVEMENT_PROTOCOL, PLAYER, stepMotion, testMap, TICK, tuningForHeight, type Input, type Motion } from '../shared/game';
 
 const port = 26673;
 let server: ChildProcess;
@@ -24,6 +24,44 @@ async function waitFor(predicate: () => boolean, ms = 3000) {
   expect(predicate()).toBe(true);
 }
 describe('real Colyseus clients', () => {
+  it('disables the development slider on ordinary game servers', async () => {
+    expect((await (await fetch(`http://127.0.0.1:${port}/api/health`)).json()).devScaleEnabled).toBe(false);
+    const room = await new Client(`ws://127.0.0.1:${port}`).create<MatchState>('pcb', { name: 'Normal', protocol: MOVEMENT_PROTOCOL }); rooms.push(room);
+    room.send('dev:scale', { height: 1 });
+    await delay(140);
+    expect(room.state.playerHeight).toBeCloseTo(PLAYER.height);
+    await room.leave();
+  });
+  it('applies the development slider authoritatively to every player in a room', async () => {
+    const devPort = port + 2;
+    const devServer = spawn(process.execPath, ['--import', 'tsx', 'server/main.ts'], { cwd: process.cwd(), env: { ...process.env, PORT: String(devPort), NODE_ENV: 'development', PCB_TEST_MAP: '1', PCB_DEV_SCALE: '1' }, stdio: 'ignore' });
+    try {
+      for (let i = 0; i < 60; i++) {
+        try { if ((await fetch(`http://127.0.0.1:${devPort}/api/health`)).ok) break; } catch { /* starting */ }
+        await delay(100);
+      }
+      expect((await (await fetch(`http://127.0.0.1:${devPort}/api/health`)).json()).devScaleEnabled).toBe(true);
+      const a = await new Client(`ws://127.0.0.1:${devPort}`).create<MatchState>('pcb', { name: 'Scale A', protocol: MOVEMENT_PROTOCOL });
+      const b = await new Client(`ws://127.0.0.1:${devPort}`).joinById<MatchState>(a.roomId, { name: 'Scale B', protocol: MOVEMENT_PROTOCOL });
+      try {
+        a.send('dev:scale', { height: 1.1 });
+        await waitFor(() => Math.abs(a.state.playerHeight - 1.1) < .0001 && Math.abs(b.state.playerHeight - 1.1) < .0001);
+        const start = a.state.players.get(a.sessionId)!.z;
+        for (let seq = 1; seq <= 12; seq++) { a.send('input', { seq, forward: 1, strafe: 0, yaw: 0, pitch: 0, jump: false, sprint: false }); await delay(18); }
+        await waitFor(() => a.state.players.get(a.sessionId)?.ack === 12);
+        expect(a.state.players.get(a.sessionId)!.z).toBeCloseTo(start - 12 * tuningForHeight(1.1).walkSpeed * TICK, 3);
+        a.send('dev:scale', { height: 'bad' });
+        a.send('dev:scale', { height: 200 });
+        await delay(150);
+        expect(a.state.playerHeight).toBeCloseTo(1.1);
+        b.send('dev:scale', { height: .95 });
+        await waitFor(() => Math.abs(a.state.playerHeight - .95) < .0001 && Math.abs(b.state.playerHeight - .95) < .0001);
+        for (let seq = 13; seq <= 24; seq++) { a.send('input', { seq, forward: 1, strafe: 0, yaw: 0, pitch: 0, jump: false, sprint: false }); await delay(18); }
+        await waitFor(() => a.state.players.get(a.sessionId)?.ack === 24);
+        expect(a.state.players.get(a.sessionId)!.z).toBeCloseTo(start - 12 * (tuningForHeight(1.1).walkSpeed + tuningForHeight(.95).walkSpeed) * TICK, 3);
+      } finally { await a.leave(); await b.leave(); }
+    } finally { devServer.kill(); }
+  }, 12000);
   it('authoritatively kills a player who runs off the PCB and respawns without awarding a kill', async () => {
     const a = await new Client(`ws://127.0.0.1:${port}`).create<MatchState>('pcb', { name: 'Edge A', protocol: MOVEMENT_PROTOCOL }); rooms.push(a);
     const b = await new Client(`ws://127.0.0.1:${port}`).joinById<MatchState>(a.roomId, { name: 'Edge B', protocol: MOVEMENT_PROTOCOL }); rooms.push(b);

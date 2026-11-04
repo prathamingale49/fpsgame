@@ -1,9 +1,34 @@
 import { describe, expect, it } from 'vitest';
 import fs from 'node:fs';
-import { aimRay, collisionCacheStats, hitscan, initialMotion, PLAYER, rayBox, stepMotion, testMap, TICK, WEAPON, type Input, type MapData } from '../shared/game';
+import { aimRay, collisionCacheStats, hitscan, initialMotion, JUMP_HEIGHT_RATIO, PLAYER, rayBox, rayPlayer, stepMotion, testMap, TICK, tuningForHeight, validDevHeight, WEAPON, type Input, type MapData } from '../shared/game';
 
 const input: Input = { seq: 1, forward: 1, strafe: 0, yaw: 0, pitch: 0, jump: false, sprint: false };
 describe('movement', () => {
+  it('scales jump apex, hitbox, speed, and eye position with the development slider', () => {
+    const empty = { ...testMap, boxes: [] };
+    expect(tuningForHeight(PLAYER.height).jumpSpeed).toBeCloseTo(PLAYER.jumpSpeed, 10);
+    for (const height of [.75, 1, 1.1, 1.25, 1.8, 2.25]) {
+      const tuning = tuningForHeight(height);
+      expect(tuning.radius).toBeCloseTo(PLAYER.radius * height / PLAYER.height, 10);
+      expect(tuning.eye).toBeCloseTo(PLAYER.eye * height / PLAYER.height, 10);
+      expect(tuning.walkSpeed).toBeCloseTo(PLAYER.walkSpeed * height / PLAYER.height, 10);
+      let motion = initialMotion([0, 0, 0]), apex = 0;
+      for (let tick = 0; tick < 120; tick++) {
+        motion = stepMotion(motion, { ...input, forward: 0, jump: tick === 0 }, empty, TICK, undefined, tuning);
+        apex = Math.max(apex, motion.y);
+      }
+      expect(apex).toBeCloseTo(JUMP_HEIGHT_RATIO * height, 1);
+      expect(motion.grounded).toBe(true);
+      expect(aimRay(0, 0, 0, 0, 0, tuning).origin[1]).toBeCloseTo(tuning.eye, 10);
+      const aboveHead = { origin: [0, height + .1, 5] as [number, number, number], direction: [0, 0, -1] as [number, number, number] };
+      expect(rayPlayer(aboveHead, initialMotion([0, 0, 0]), tuning)).toBe(Infinity);
+    }
+  });
+  it('rejects invalid and out-of-range developer scale requests', () => {
+    expect(validDevHeight(1.12)).toBe(1.1);
+    expect(validDevHeight(1.1)).toBe(1.1);
+    for (const value of [undefined, '1.1', NaN, Infinity, -.1, 0, .5, 3]) expect(validDevHeight(value)).toBeNull();
+  });
   it('moves forward consistently over fixed ticks', () => {
     let m = initialMotion([0, 0, 0]);
     for (let i = 0; i < 60; i++) m = stepMotion(m, input, testMap, TICK);

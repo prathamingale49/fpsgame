@@ -2,7 +2,7 @@ import { defineServer, defineRoom } from 'colyseus';
 import express from 'express';
 import { existsSync, readFileSync } from 'node:fs';
 import path from 'node:path';
-import { GameRoom, setActiveMap, activeMap, serverPerf } from './room.js';
+import { GameRoom, setActiveMap, activeMap, serverPerf, DEV_SCALE_ENABLED } from './room.js';
 import type { MapData } from '../shared/game.js';
 import { MOVEMENT_PROTOCOL, testMap } from '../shared/game.js';
 
@@ -18,6 +18,7 @@ const app = defineServer({
   rooms: { pcb: defineRoom(GameRoom) },
   express: (router) => {
     router.get('/api/health', (_req, res) => res.json({ ok: true, map: activeMap.id, movementProtocol: MOVEMENT_PROTOCOL,
+      devScaleEnabled: DEV_SCALE_ENABLED,
       ...(process.env.PCB_SOAK_METRICS === '1' ? { perf: { ...serverPerf, cache: serverPerf.cache(), heapMB: process.memoryUsage().heapUsed / 1048576 } } : {}) }));
     router.get('/api/map', (_req, res) => res.json(activeMap));
     router.use(express.static(path.resolve('dist')));

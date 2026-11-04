@@ -1,8 +1,9 @@
 import { Room, type Client } from 'colyseus';
 import { MatchState, PlayerState, PickupState } from './state.js';
-import { aimRay, collisionCacheStats, hitscan, initialMotion, stepMotion, testMap, TICK, MOVEMENT_PROTOCOL, MATCH_SECONDS, RESPAWN_SECONDS, PLAYER, WEAPON, validInput, type Input, type MapData, type Motion } from '../shared/game.js';
+import { aimRay, collisionCacheStats, hitscan, initialMotion, stepMotion, testMap, TICK, MOVEMENT_PROTOCOL, MATCH_SECONDS, RESPAWN_SECONDS, PLAYER, WEAPON, tuningForHeight, validDevHeight, validInput, type Input, type MapData, type Motion, type PlayerTuning } from '../shared/game.js';
 const PLAYER_PICKUP_DISTANCE = .9;
 const TRACE_MOVEMENT = process.env.PCB_MOVEMENT_TRACE === '1';
+export const DEV_SCALE_ENABLED = process.env.PCB_DEV_SCALE === '1' && process.env.NODE_ENV !== 'production';
 
 type Runtime = { queue: Map<number, Input>; lastReceived: number; lastSeq: number; credit: number; lastShot: number; reloadAt: number; respawnAt: number };
 export let activeMap: MapData = testMap;
@@ -23,10 +24,12 @@ export class GameRoom extends Room {
   private pickupRespawns = new Map<string, number>();
   private readonly matchSeconds = Number(process.env.PCB_TEST_MATCH_SECONDS || MATCH_SECONDS);
   private readonly pickupSeconds = Number(process.env.PCB_TEST_PICKUP_SECONDS || WEAPON.pickupRespawnSeconds);
+  private playerTuning: PlayerTuning = PLAYER;
 
   onCreate() {
     this.roomId = Math.random().toString(36).slice(2, 8).toUpperCase();
     this.state.mapId = activeMap.id;
+    this.state.playerHeight = this.playerTuning.height;
     this.state.seconds = this.matchSeconds;
     activeMap.spawns.slice(2, 8).forEach((spawn, index) => this.state.pickups.set(String(index), new PickupState({ x: spawn[0], y: spawn[1] + .2, z: spawn[2] })));
     this.setSimulationInterval(() => this.tick(), 1000 / 60);
@@ -45,6 +48,21 @@ export class GameRoom extends Room {
     });
     this.onMessage('shoot', (client) => this.shoot(client));
     this.onMessage('reload', (client) => this.reload(client.sessionId));
+    this.onMessage('dev:scale', (client, payload: unknown) => {
+      if (!DEV_SCALE_ENABLED || !this.runtime.has(client.sessionId)) return;
+      const value = payload && typeof payload === 'object' ? (payload as { height?: unknown }).height : undefined;
+      const height = validDevHeight(value);
+      if (height === null || height === this.playerTuning.height) return;
+      this.playerTuning = tuningForHeight(height);
+      this.state.playerHeight = height;
+      // Input predictions made with the previous tuning cannot be replayed under the new tuning.
+      this.runtime.forEach((r, id) => {
+        r.queue.clear(); r.credit = 0; r.lastSeq = r.lastReceived;
+        const p = this.state.players.get(id);
+        if (p) p.ack = r.lastSeq;
+      });
+      this.broadcast('feed', { text: `DEV SCALE · ${height.toFixed(2)} mm` });
+    });
   }
 
   onJoin(client: Client, options: { name?: string; protocol?: number }) {
@@ -126,7 +144,7 @@ export class GameRoom extends Room {
       while (r.credit >= 1 && r.queue.has(r.lastSeq + 1) && processed < 60) {
         const input = r.queue.get(r.lastSeq + 1)!;
         r.queue.delete(input.seq);
-        const motion = stepMotion({ x: p.x, y: p.y, z: p.z, vy: p.vy, grounded: p.grounded, jumpHeld: p.jumpHeld, mantleTarget: p.mantleTarget }, input, activeMap);
+        const motion = stepMotion({ x: p.x, y: p.y, z: p.z, vy: p.vy, grounded: p.grounded, jumpHeld: p.jumpHeld, mantleTarget: p.mantleTarget }, input, activeMap, TICK, undefined, this.playerTuning);
         p.x = motion.x; p.y = motion.y; p.z = motion.z; p.vy = motion.vy; p.grounded = motion.grounded; p.jumpHeld = motion.jumpHeld; p.mantleTarget = motion.mantleTarget;
         p.yaw = input.yaw; p.pitch = input.pitch;
         r.lastSeq = input.seq; p.ack = input.seq; r.credit--; processed++;
@@ -139,7 +157,7 @@ export class GameRoom extends Room {
       if (!r.queue.size) r.credit = Math.min(r.credit, 6);
       if (!p.alive) return;
       if (p.reserve < WEAPON.maxReserve) this.state.pickups.forEach((pickup, pickupId) => {
-        if (!pickup.active || Math.hypot(p.x - pickup.x, p.z - pickup.z) > PLAYER_PICKUP_DISTANCE || Math.abs(p.y - pickup.y) > 1.5) return;
+        if (!pickup.active || Math.hypot(p.x - pickup.x, p.z - pickup.z) > PLAYER_PICKUP_DISTANCE * this.playerTuning.height / PLAYER.height || Math.abs(p.y - pickup.y) > 1.5 * this.playerTuning.height / PLAYER.height) return;
         p.reserve = Math.min(WEAPON.maxReserve, p.reserve + WEAPON.pickupRounds);
         pickup.active = false; this.pickupRespawns.set(pickupId, now + this.pickupSeconds);
         this.broadcast('pickup', { player: id, amount: WEAPON.pickupRounds });
@@ -170,9 +188,9 @@ export class GameRoom extends Room {
     if (!p || !r || !p.alive || !p.connected || this.state.phase !== 'playing' || p.reloading || now - r.lastShot < WEAPON.fireInterval) return;
     if (p.ammo <= 0) { this.reload(id); return; }
     r.lastShot = now; p.ammo--;
-    const ray = aimRay(p.x, p.y, p.z, p.yaw, p.pitch);
+    const ray = aimRay(p.x, p.y, p.z, p.yaw, p.pitch, this.playerTuning);
     const opponents = [...this.state.players.entries()].filter(([otherId, other]) => otherId !== id && other.alive && other.connected).map(([otherId, other]) => [otherId, other as Motion] as [string, Motion]);
-    const result = hitscan(ray, activeMap, opponents, id);
+    const result = hitscan(ray, activeMap, opponents, id, this.playerTuning);
     const end = ray.origin.map((v, i) => v + ray.direction[i] * result.distance);
     this.broadcast('shot', { shooter: id, from: ray.origin, to: end, hit: result.target });
     if (p.ammo === 0 && p.reserve > 0) this.reload(id);
