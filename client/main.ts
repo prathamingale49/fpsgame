@@ -57,7 +57,8 @@ function recordMovement(event: string, ack: number, correctionValue = 0, forward
   if (movementEvents.length > 4000) movementEvents.shift();
 }
 const keys = new Set<string>();
-const remotes = new Map<string, { mesh: THREE.Group; target: THREE.Vector3; yaw: number }>();
+type RemotePlayer = { mesh: THREE.Group; healthBar: THREE.Group; healthFill: THREE.Mesh<THREE.PlaneGeometry, THREE.MeshBasicMaterial>; target: THREE.Vector3; yaw: number; hp: number; displayedHp: number };
+const remotes = new Map<string, RemotePlayer>();
 const shots: { line: THREE.LineSegments | THREE.Line; born: number }[] = [];
 const spoolMeshes = new Map<string, THREE.Group>();
 let correction = 0, collisionChecks = 0, ping = 0;
@@ -90,7 +91,7 @@ function applyPlayerHeight(height: number) {
   scaleSlider.value = height.toFixed(2);
   updateScaleReadout(height);
   gunView.scale.setScalar(.75 * height / 1.8);
-  remotes.forEach(entry => entry.mesh.scale.setScalar(height / 2.2));
+  remotes.forEach(entry => entry.mesh.scale.setScalar(height / 2.48));
 }
 let showDebug = false, fpsFrames = 0, fpsStart = performance.now(), lastFrameTime = 0, renderCpuMs = 0;
 const frameTimes: number[] = [];
@@ -157,12 +158,29 @@ buildMap(map);
 
 function makePlayer(index: number): THREE.Group {
   const group = new THREE.Group(); const suit = playerMaterials[index % playerMaterials.length];
-  const body = new THREE.Mesh(new THREE.CylinderGeometry(.39, .47, 1.1, 8), suit); body.position.y = 1.02; group.add(body);
-  const head = new THREE.Mesh(new THREE.SphereGeometry(.37, 12, 8), pale); head.position.y = 1.83; group.add(head);
-  const visor = new THREE.Mesh(new THREE.BoxGeometry(.52, .22, .08), dark); visor.position.set(0, 1.88, -.34); group.add(visor);
-  const gun = new THREE.Mesh(new THREE.BoxGeometry(.15, .14, .9), dark); gun.position.set(.32, 1.32, -.52); group.add(gun);
-  group.scale.setScalar(playerTuning.height / 2.2);
+  // An upright rocket-person: pointed nose, cylindrical suit, view window, fins and boots.
+  const body = new THREE.Mesh(new THREE.CylinderGeometry(.34, .43, 1.15, 12), suit); body.position.y = 1; group.add(body);
+  const nose = new THREE.Mesh(new THREE.ConeGeometry(.34, .72, 12), suit); nose.position.y = 1.94; group.add(nose);
+  const noseTip = new THREE.Mesh(new THREE.ConeGeometry(.09, .16, 12), copper); noseTip.position.y = 2.38; group.add(noseTip);
+  const window = new THREE.Mesh(new THREE.SphereGeometry(.235, 12, 8), dark); window.scale.set(1, .7, .35); window.position.set(0, 1.34, -.315); group.add(window);
+  const glass = new THREE.Mesh(new THREE.SphereGeometry(.14, 12, 8), pale); glass.scale.set(1, .6, .2); glass.position.set(-.055, 1.38, -.394); group.add(glass);
+  const collar = new THREE.Mesh(new THREE.CylinderGeometry(.405, .405, .12, 12), copper); collar.position.y = .43; group.add(collar);
+  const nozzle = new THREE.Mesh(new THREE.CylinderGeometry(.23, .31, .25, 12), dark); nozzle.position.y = .25; group.add(nozzle);
+  for (const side of [-1, 1]) {
+    const fin = new THREE.Mesh(new THREE.BoxGeometry(.25, .7, .13), suit); fin.position.set(side * .47, .55, 0); fin.rotation.z = side * .24; group.add(fin);
+    const boot = new THREE.Mesh(new THREE.BoxGeometry(.24, .21, .34), dark); boot.position.set(side * .24, .13, -.08); group.add(boot);
+    const arm = new THREE.Mesh(new THREE.CapsuleGeometry(.11, .33, 4, 8), suit); arm.position.set(side * .44, 1.09, -.04); arm.rotation.z = side * .2; group.add(arm);
+  }
+  group.scale.setScalar(playerTuning.height / 2.48);
   return group;
+}
+function makeHealthBar(): { bar: THREE.Group; fill: THREE.Mesh<THREE.PlaneGeometry, THREE.MeshBasicMaterial> } {
+  const bar = new THREE.Group();
+  const background = new THREE.Mesh(new THREE.PlaneGeometry(1.02, .16), new THREE.MeshBasicMaterial({ color: '#12221b', transparent: true, opacity: .9, side: THREE.DoubleSide }));
+  const fill = new THREE.Mesh(new THREE.PlaneGeometry(.96, .10), new THREE.MeshBasicMaterial({ color: '#36e26b', side: THREE.DoubleSide }));
+  fill.position.z = .002;
+  bar.add(background, fill);
+  return { bar, fill };
 }
 const gunView = new THREE.Group(); camera.add(gunView); scene.add(camera);
 gunView.scale.setScalar(.75 * PLAYER.height / 1.8);
@@ -265,10 +283,22 @@ function syncState(state: MatchState) {
     if (id === room!.sessionId || !p.alive || !p.connected) return;
     present.add(id);
     let entry = remotes.get(id);
-    if (!entry) { const mesh = makePlayer(playerColorIndex++); scene.add(mesh); entry = { mesh, target: new THREE.Vector3(p.x, p.y, p.z), yaw: p.yaw }; mesh.position.copy(entry.target); remotes.set(id, entry); }
-    entry.target.set(p.x, p.y, p.z); entry.yaw = p.yaw;
+    if (!entry) {
+      const mesh = makePlayer(playerColorIndex++);
+      const { bar, fill } = makeHealthBar();
+      scene.add(mesh, bar);
+      entry = { mesh, healthBar: bar, healthFill: fill, target: new THREE.Vector3(p.x, p.y, p.z), yaw: p.yaw, hp: p.hp, displayedHp: p.hp };
+      mesh.position.copy(entry.target);
+      remotes.set(id, entry);
+    }
+    entry.target.set(p.x, p.y, p.z); entry.yaw = p.yaw; entry.hp = p.hp;
   });
-  for (const [id, entry] of remotes) if (!present.has(id)) { scene.remove(entry.mesh); remotes.delete(id); }
+  for (const [id, entry] of remotes) if (!present.has(id)) {
+    scene.remove(entry.mesh, entry.healthBar);
+    entry.mesh.traverse(obj => { if (obj instanceof THREE.Mesh) obj.geometry.dispose(); });
+    entry.healthBar.traverse(obj => { if (obj instanceof THREE.Mesh) { obj.geometry.dispose(); (obj.material as THREE.Material).dispose(); } });
+    remotes.delete(id);
+  }
   state.pickups?.forEach((pickup, id) => {
     let mesh = spoolMeshes.get(id);
     if (!mesh) { mesh = makeSpool(); scene.add(mesh); spoolMeshes.set(id, mesh); }
@@ -389,7 +419,17 @@ function frame(now: number) {
   } else {
     const t = now * .00015; camera.position.set(Math.sin(t) * 30, 24, Math.cos(t) * 30); camera.lookAt(0, 0, 0);
   }
-  for (const entry of remotes.values()) { entry.mesh.position.lerp(entry.target, Math.min(1, dt * 12)); entry.mesh.rotation.y += Math.atan2(Math.sin(entry.yaw - entry.mesh.rotation.y), Math.cos(entry.yaw - entry.mesh.rotation.y)) * Math.min(1, dt * 12); }
+  for (const entry of remotes.values()) {
+    entry.mesh.position.lerp(entry.target, Math.min(1, dt * 12));
+    entry.mesh.rotation.y += Math.atan2(Math.sin(entry.yaw - entry.mesh.rotation.y), Math.cos(entry.yaw - entry.mesh.rotation.y)) * Math.min(1, dt * 12);
+    entry.displayedHp = THREE.MathUtils.damp(entry.displayedHp, entry.hp, 18, dt);
+    const fraction = THREE.MathUtils.clamp(entry.displayedHp / 100, 0, 1);
+    entry.healthFill.scale.x = Math.max(.001, fraction);
+    entry.healthFill.position.x = -.48 * (1 - fraction);
+    entry.healthFill.material.color.setHSL(fraction * .34, .85, .48);
+    entry.healthBar.position.set(entry.mesh.position.x, entry.mesh.position.y + playerTuning.height + .3, entry.mesh.position.z);
+    entry.healthBar.quaternion.copy(camera.quaternion);
+  }
   for (let i = shots.length - 1; i >= 0; i--) if (now - shots[i].born > 120) { scene.remove(shots[i].line); shots[i].line.geometry.dispose(); (shots[i].line.material as THREE.Material).dispose(); shots.splice(i, 1); }
   const width = innerWidth, height = innerHeight;
   if (canvas.width !== Math.round(width * renderer.getPixelRatio()) || canvas.height !== Math.round(height * renderer.getPixelRatio())) { renderer.setSize(width, height, false); camera.aspect = width / height; camera.updateProjectionMatrix(); }
