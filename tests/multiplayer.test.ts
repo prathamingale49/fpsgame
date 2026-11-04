@@ -3,13 +3,14 @@ import { Client } from '@colyseus/sdk';
 import { spawn, type ChildProcess } from 'node:child_process';
 import { setTimeout as delay } from 'node:timers/promises';
 import type { MatchState } from '../server/state';
+import { initialMotion, stepMotion, testMap, type Input, type Motion } from '../shared/game';
 
 const port = 26673;
 let server: ChildProcess;
 const clients: Client[] = [];
 const rooms: { leave(): Promise<unknown> }[] = [];
 beforeAll(async () => {
-  server = spawn(process.execPath, ['--import', 'tsx', 'server/main.ts'], { cwd: process.cwd(), env: { ...process.env, PORT: String(port), PCB_TEST_MAP: '1' }, stdio: 'ignore' });
+  server = spawn(process.execPath, ['--import', 'tsx', 'server/main.ts'], { cwd: process.cwd(), env: { ...process.env, PORT: String(port), PCB_TEST_MAP: '1', PCB_TEST_PICKUP_SECONDS: '1' }, stdio: 'ignore' });
   for (let i = 0; i < 60; i++) {
     try { if ((await fetch(`http://127.0.0.1:${port}/api/health`)).ok) break; } catch { /* starting */ }
     await delay(100);
@@ -23,6 +24,53 @@ async function waitFor(predicate: () => boolean, ms = 3000) {
   expect(predicate()).toBe(true);
 }
 describe('real Colyseus clients', () => {
+  it('processes ordered inputs through simulated latency and jitter', async () => {
+    const a = await new Client(`ws://127.0.0.1:${port}`).create<MatchState>('pcb', { name: 'Latency A' }); rooms.push(a);
+    const b = await new Client(`ws://127.0.0.1:${port}`).joinById<MatchState>(a.roomId, { name: 'Latency B' }); rooms.push(b);
+    await waitFor(() => a.state.phase === 'playing');
+    let expected: Motion = initialMotion([0, 0, 0]), seq = 0;
+    for (const latency of [0, 50, 100, 200]) {
+      const inputs: Input[] = Array.from({ length: 20 }, (_, i) => ({ seq: ++seq, forward: i < 12 ? 1 : 0, strafe: 0, yaw: 0, pitch: 0, jump: i === 0, sprint: false }));
+      let arrival = 0;
+      const deliveries = inputs.map((input, i) => {
+        arrival = Math.max(arrival + 1, i * 16.7 + latency + ((i * 17) % 33) - 16);
+        return delay(Math.max(0, arrival)).then(() => a.send('input', input));
+      });
+      for (const input of inputs) expected = stepMotion(expected, input, { ...testMap, boxes: [] });
+      await Promise.all(deliveries);
+      await waitFor(() => a.state.players.get(a.sessionId)?.ack === seq && b.state.players.get(a.sessionId)?.ack === seq);
+      expect(a.state.players.get(a.sessionId)!.z).toBeCloseTo(expected.z, 3);
+      expect(a.state.players.get(a.sessionId)!.y).toBeCloseTo(expected.y, 3);
+    }
+    await a.leave(); await b.leave();
+  }, 10000);
+  it('rate limits shots, reloads partial magazines, and synchronizes solder spools', async () => {
+    const a = await new Client(`ws://127.0.0.1:${port}`).create<MatchState>('pcb', { name: 'Solder A' }); rooms.push(a);
+    const b = await new Client(`ws://127.0.0.1:${port}`).joinById<MatchState>(a.roomId, { name: 'Solder B' }); rooms.push(b);
+    await waitFor(() => a.state.phase === 'playing' && b.state.players.size === 2);
+    a.send('shoot'); a.send('shoot'); a.send('shoot');
+    await waitFor(() => a.state.players.get(a.sessionId)?.ammo === 29);
+    await delay(130); a.send('shoot');
+    await waitFor(() => a.state.players.get(a.sessionId)?.ammo === 28);
+    a.send('reload');
+    await waitFor(() => a.state.players.get(a.sessionId)?.reloading === true);
+    a.send('shoot'); await delay(100);
+    expect(a.state.players.get(a.sessionId)?.ammo).toBe(28);
+    await waitFor(() => a.state.players.get(a.sessionId)?.ammo === 30, 3000);
+    expect(a.state.players.get(a.sessionId)?.reserve).toBe(58);
+    for (let seq = 1; seq <= 34; seq++) {
+      a.send('input', { seq, forward: 0, strafe: 1, yaw: 0, pitch: 0, jump: false, sprint: false, reserve: 120 });
+      await delay(17);
+    }
+    await waitFor(() => a.state.players.get(a.sessionId)?.reserve === 88 && b.state.pickups.get('0')?.active === false);
+    expect(b.state.players.get(a.sessionId)?.reserve).toBe(88);
+    for (let seq = 35; seq <= 49; seq++) {
+      a.send('input', { seq, forward: 0, strafe: -1, yaw: 0, pitch: 0, jump: false, sprint: false });
+      await delay(17);
+    }
+    await waitFor(() => a.state.pickups.get('0')?.active === true && b.state.pickups.get('0')?.active === true, 2500);
+    await a.leave(); await b.leave();
+  }, 10000);
   it('creates, joins, synchronizes movement, combat and disconnect', async () => {
     const c1 = new Client(`ws://127.0.0.1:${port}`), c2 = new Client(`ws://127.0.0.1:${port}`); clients.push(c1, c2);
     const a = await c1.create<MatchState>('pcb', { name: 'Alpha' }); rooms.push(a);

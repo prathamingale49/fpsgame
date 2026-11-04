@@ -1,10 +1,11 @@
 export const TICK = 1 / 60;
 export const MATCH_SECONDS = 300;
 export const RESPAWN_SECONDS = 2.5;
-export const PLAYER_RADIUS = 0.48;
-export const PLAYER_HEIGHT = 2.4;
-export const EYE_HEIGHT = 2.05;
-export const WEAPON = { damage: 25, magazine: 30, reserve: 120, fireInterval: 0.1, reloadSeconds: 1.7, range: 130 } as const;
+export const PLAYER = { radius: .36, height: 1.8, eye: 1.54, walkSpeed: 14, sprintSpeed: 20, jumpSpeed: 13.5, gravity: 30 } as const;
+export const PLAYER_RADIUS = PLAYER.radius;
+export const PLAYER_HEIGHT = PLAYER.height;
+export const EYE_HEIGHT = PLAYER.eye;
+export const WEAPON = { name: 'Solder Blaster', damage: 25, magazine: 30, reserve: 60, maxReserve: 120, pickupRounds: 30, pickupRespawnSeconds: 20, fireInterval: 0.1, reloadSeconds: 1.7, range: 130 } as const;
 
 export type Box = { min: [number, number, number]; max: [number, number, number]; name?: string };
 export type Spawn = [number, number, number];
@@ -35,37 +36,64 @@ export function validInput(v: unknown): v is Input {
     && typeof a.jump === 'boolean' && typeof a.sprint === 'boolean';
 }
 
-function overlaps(x: number, y: number, z: number, box: Box): boolean {
-  return x + PLAYER_RADIUS > box.min[0] && x - PLAYER_RADIUS < box.max[0]
-    && z + PLAYER_RADIUS > box.min[2] && z - PLAYER_RADIUS < box.max[2]
-    && y < box.max[1] - 0.01 && y + PLAYER_HEIGHT > box.min[1] + 0.01;
+const CELL = 5;
+type Index = Map<string, Box[]>;
+const indices = new WeakMap<MapData, { cells: Index; queries: Index }>();
+function nearby(map: MapData, x0: number, z0: number, x1: number, z1: number): Box[] {
+  let index = indices.get(map);
+  if (!index) {
+    index = { cells: new Map(), queries: new Map() };
+    for (const box of map.boxes) for (let x = Math.floor(box.min[0] / CELL); x <= Math.floor(box.max[0] / CELL); x++) for (let z = Math.floor(box.min[2] / CELL); z <= Math.floor(box.max[2] / CELL); z++) {
+      const key = `${x},${z}`, cell = index.cells.get(key) ?? [];
+      cell.push(box); index.cells.set(key, cell);
+    }
+    indices.set(map, index);
+  }
+  const cx0 = Math.floor(x0 / CELL), cx1 = Math.floor(x1 / CELL), cz0 = Math.floor(z0 / CELL), cz1 = Math.floor(z1 / CELL);
+  if (cx0 === cx1 && cz0 === cz1) return index.cells.get(`${cx0},${cz0}`) ?? [];
+  const queryKey = `${cx0},${cz0}:${cx1},${cz1}`;
+  const cached = index.queries.get(queryKey); if (cached) return cached;
+  const result = new Set<Box>();
+  for (let x = cx0; x <= cx1; x++) for (let z = cz0; z <= cz1; z++) for (const box of index.cells.get(`${x},${z}`) ?? []) result.add(box);
+  const boxes = [...result]; index.queries.set(queryKey, boxes); return boxes;
+}
+export type MotionStats = { collisionChecks: number };
+function touches(x: number, z: number, box: Box): boolean {
+  const dx = Math.max(box.min[0] - x, 0, x - box.max[0]);
+  const dz = Math.max(box.min[2] - z, 0, z - box.max[2]);
+  return dx * dx + dz * dz < PLAYER_RADIUS * PLAYER_RADIUS;
+}
+function overlaps(x: number, y: number, z: number, box: Box, stats?: MotionStats): boolean {
+  if (stats) stats.collisionChecks++;
+  return touches(x, z, box) && y < box.max[1] - .01 && y + PLAYER_HEIGHT > box.min[1] + .01;
 }
 
-export function stepMotion(previous: Motion, input: Input, map: MapData, dt = TICK): Motion {
+export function stepMotion(previous: Motion, input: Input, map: MapData, dt = TICK, stats?: MotionStats): Motion {
   const out = { ...previous };
   const f = input.forward, s = input.strafe;
   const len = Math.max(1, Math.hypot(f, s));
-  const speed = input.sprint ? 12 : 8.5;
+  const speed = input.sprint ? PLAYER.sprintSpeed : PLAYER.walkSpeed;
   const dx = (-Math.sin(input.yaw) * f + Math.cos(input.yaw) * s) / len * speed * dt;
   const dz = (-Math.cos(input.yaw) * f - Math.sin(input.yaw) * s) / len * speed * dt;
-  if (input.jump && out.grounded) { out.vy = 18.5; out.grounded = false; }
-  out.vy -= 23 * dt;
+  if (input.jump && out.grounded) { out.vy = PLAYER.jumpSpeed; out.grounded = false; }
+  out.vy -= PLAYER.gravity * dt;
   const oldY = out.y;
   out.y += out.vy * dt;
   out.grounded = false;
   if (out.y <= map.ground) { out.y = map.ground; out.vy = 0; out.grounded = true; }
-  for (const box of map.boxes) {
+  const candidates = nearby(map, Math.min(out.x, out.x + dx) - PLAYER_RADIUS, Math.min(out.z, out.z + dz) - PLAYER_RADIUS, Math.max(out.x, out.x + dx) + PLAYER_RADIUS, Math.max(out.z, out.z + dz) + PLAYER_RADIUS);
+  for (const box of candidates) {
+    if (stats) stats.collisionChecks++;
     if (out.vy <= 0 && oldY >= box.max[1] - 0.02 && out.y <= box.max[1]
-      && out.x + PLAYER_RADIUS > box.min[0] && out.x - PLAYER_RADIUS < box.max[0]
-      && out.z + PLAYER_RADIUS > box.min[2] && out.z - PLAYER_RADIUS < box.max[2]) {
+      && touches(out.x, out.z, box)) {
       out.y = box.max[1]; out.vy = 0; out.grounded = true;
     }
   }
   const tryX = clamp(out.x + dx, -map.width / 2 + PLAYER_RADIUS, map.width / 2 - PLAYER_RADIUS);
-  if (!map.boxes.some(b => overlaps(tryX, out.y, out.z, b))) out.x = tryX;
+  if (!candidates.some(b => overlaps(tryX, out.y, out.z, b, stats))) out.x = tryX;
   const tryZ = clamp(out.z + dz, -map.depth / 2 + PLAYER_RADIUS, map.depth / 2 - PLAYER_RADIUS);
-  if (!map.boxes.some(b => overlaps(out.x, out.y, tryZ, b))) out.z = tryZ;
-  if (out.y > oldY && map.boxes.some(b => overlaps(out.x, out.y, out.z, b))) { out.y = oldY; out.vy = 0; }
+  if (!candidates.some(b => overlaps(out.x, out.y, tryZ, b, stats))) out.z = tryZ;
+  if (out.y > oldY && candidates.some(b => overlaps(out.x, out.y, out.z, b, stats))) { out.y = oldY; out.vy = 0; }
   return out;
 }
 

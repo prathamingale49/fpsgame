@@ -13,7 +13,7 @@ npm run dev
 
 Open `http://localhost:5173`. Use **Create Room** and share the room link, or use **Play Now** to join an open room. Each room holds up to eight players. A match begins when two join. For internet play, run the server on a publicly reachable host and share its HTTPS URL; the WebSocket endpoint uses the same host and port in production.
 
-Controls: WASD move, mouse aim, left click fire, Space jump, Shift sprint, R reload, Tab scoreboard, Esc unlock pointer. Matches last five minutes, with unlimited respawns. When the timer ends, the highest kill count wins; ties favor fewer deaths.
+Controls: WASD move, mouse aim, left click fire, Space jump, Shift sprint, R reload, Tab scoreboard, F3 performance overlay, Esc unlock pointer. The Solder Blaster has a 30-round magazine and collects reserve ammunition from solder spools around the map. Graphics quality, mouse sensitivity, and sound volume are available under Settings. Matches last five minutes, with unlimited respawns. When the timer ends, the highest kill count wins; ties favor fewer deaths.
 
 ## Import the BMS assembly
 
@@ -39,7 +39,7 @@ npm test
 npm run test:browser
 ```
 
-`npm test` checks fixed-step movement, jumps, boundaries, component shot blocking, and two real Colyseus SDK clients joining, moving, shooting, taking damage, dying, respawning, disconnecting, and completing a match. `test:browser` uses two independent Chrome contexts to verify room joining, WebGL rendering, shared scoreboard, page-reload reconnection, pointer lock, and movement from spawn. It requires Chrome at `C:/Program Files/Google/Chrome/Application/chrome.exe` and writes screenshots to `artifacts/`.
+`npm test` checks fixed-step movement, jumps, boundaries, component shot blocking, input delivery under 0–200 ms latency with jitter, server-controlled ammunition and pickups, and two real Colyseus SDK clients joining, moving, shooting, taking damage, dying, respawning, disconnecting, and completing a match. `test:browser` uses two independent Chrome contexts to verify room joining, WebGL rendering, shared scoreboard, page-reload reconnection, pointer lock, movement and key release, graphics settings, and F3 telemetry. It requires Chrome at `C:/Program Files/Google/Chrome/Application/chrome.exe` and writes screenshots to `artifacts/`. Before/after frame and collision measurements are in [docs/performance.md](docs/performance.md).
 
 ## Hosting
 
@@ -58,7 +58,7 @@ To add another board, pass a fourth import argument such as `new-board`, run `np
 
 - `client/`: Vite UI and Three.js renderer, immediate local movement, reconciliation from Colyseus state, and smoothed remote avatars.
 - `server/`: authoritative room simulation, rate-limited hitscan, damage, match clock, reconnect window, and spawn control.
-- `shared/`: fixed-step movement, collision, weapon rules, and map contract.
+- `shared/`: fixed-step movement, spatial collision grid, player and weapon tuning, and map contract.
 - `tools/`: reusable STEP/CSV/artwork import and browser check.
 - `tests/`: movement, combat, and multiplayer integration checks.
 
