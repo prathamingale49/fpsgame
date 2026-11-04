@@ -1,0 +1,17 @@
+<!doctype html><html lang="en"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>PCB FPS</title></head><body>
+<div id="app">
+  <canvas id="game"></canvas>
+  <div id="topbar"><span class="brand">PCB<span>FPS</span></span><span id="map-name">PROTOTYPE CIRCUIT</span><span id="room-label">ROOM —</span></div>
+  <div id="hud" class="hidden">
+    <div id="crosshair"><i></i><i></i><i></i><i></i></div>
+    <div id="hitmarker" class="hidden">✕</div><div id="damage-flash"></div>
+    <div id="match-info"><strong id="timer">05:00</strong><small id="player-count">1 / 8 PLAYERS</small></div>
+    <div id="kill-feed"></div>
+    <div id="bottom-hud"><div class="hud-block"><small>INTEGRITY</small><strong id="hp">100</strong><div class="meter"><i id="hp-bar"></i></div></div><div class="hud-center">WASD MOVE <b>·</b> SHIFT SPRINT <b>·</b> SPACE JUMP <b>·</b> R RELOAD</div><div class="hud-block ammo"><small>AMMUNITION</small><strong><span id="ammo">30</span><em> / <span id="reserve">120</span></em></strong><div class="meter"><i id="ammo-bar"></i></div></div></div>
+    <div id="scoreboard" class="hidden"><h2>SCOREBOARD</h2><div id="scores"></div><small>HOLD TAB TO VIEW</small></div>
+    <div id="death" class="hidden"><h2>SIGNAL LOST</h2><p>Respawning…</p></div>
+    <div id="winner" class="hidden"></div>
+    <div id="pause" class="hidden"><h2>PAUSED</h2><p>Click to resume</p><button id="leave">Leave match</button></div>
+  </div>
+  <div id="menu"><div class="menu-card"><div class="eyebrow">MULTIPLAYER · BMS ARENA</div><h1>PCB <span>FPS</span></h1><p>Microscopic combat on a real circuit board.</p><label for="name">PLAYER NAME</label><input id="name" maxlength="18" placeholder="Engineer" autocomplete="nickname"><div class="menu-actions"><button id="play" class="primary">PLAY NOW <span>↗</span></button><button id="create">CREATE ROOM</button></div><div class="join-line"><input id="code" placeholder="ROOM CODE" maxlength="12"><button id="join">JOIN ROOM</button></div><div class="menu-links"><button id="controls-toggle">CONTROLS</button><button id="settings-toggle">SETTINGS</button></div><div id="menu-detail" class="hidden"></div><div id="error" role="alert"></div></div><div class="menu-aside"><div class="chip">LIVE · 2–8 PLAYERS</div><h2>FIGHT<br>BETWEEN<br>THE <span>TRACES.</span></h2><p>Run circuits. Take cover behind components. Outshoot your friends.</p><div class="decor-trace"></div></div></div>
+</div><script type="module" src="/main.ts"></script></body></html>

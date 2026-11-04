@@ -1,0 +1,10 @@
+node_modules/
+dist/
+dist-server/
+*.log
+.env
+assets/source/
+.npm-cache/
+assets/public/maps/*
+!assets/public/maps/.gitkeep
+artifacts/
