@@ -37,9 +37,10 @@ The STEP assembly also includes a BeagleBone Black model (`Q14`) that spans roug
 npm run build
 npm test
 npm run test:browser
+npm run test:movement
 ```
 
-`npm test` checks fixed-step movement, jumps, boundaries, component shot blocking, input delivery under 0–200 ms latency with jitter, server-controlled ammunition and pickups, and two real Colyseus SDK clients joining, moving, shooting, taking damage, dying, respawning, disconnecting, and completing a match. `test:browser` uses two independent Chrome contexts to verify room joining, WebGL rendering, shared scoreboard, page-reload reconnection, pointer lock, movement and key release, graphics settings, and F3 telemetry. It requires Chrome at `C:/Program Files/Google/Chrome/Application/chrome.exe` and writes screenshots to `artifacts/`. Before/after frame and collision measurements are in [docs/performance.md](docs/performance.md).
+`npm test` checks fixed-step movement, jumps, boundaries, component shot blocking, ordered and out-of-order input delivery, server-controlled ammunition and pickups, and two real Colyseus SDK clients joining, moving, shooting, taking damage, dying, respawning, disconnecting, and completing a match. `test:browser` checks room joining, WebGL rendering, reconnection, pointer lock, basic movement, graphics settings, and F3 telemetry. `test:movement` uses two independent browser clients and the real server to hold W through multiple authoritative snapshots, check for backward corrections and stopping after release, and repeat at 0, 50, 100, and 200 ms simulated latency with a reduced render rate. It also runs on the BMS when the private map assets are present. Browser tests require Chrome at `C:/Program Files/Google/Chrome/Application/chrome.exe` and write diagnostics to `artifacts/`. Before/after frame and collision measurements are in [docs/performance.md](docs/performance.md).
 
 ## Hosting
 

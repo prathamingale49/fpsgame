@@ -1,4 +1,5 @@
 export const TICK = 1 / 60;
+export const MOVEMENT_PROTOCOL = 2;
 export const MATCH_SECONDS = 300;
 export const RESPAWN_SECONDS = 2.5;
 export const PLAYER = { radius: .36, height: 1.8, eye: 1.54, walkSpeed: 14, sprintSpeed: 20, jumpSpeed: 13.5, gravity: 30 } as const;

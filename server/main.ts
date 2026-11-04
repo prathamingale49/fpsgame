@@ -4,7 +4,7 @@ import { existsSync, readFileSync } from 'node:fs';
 import path from 'node:path';
 import { GameRoom, setActiveMap, activeMap } from './room.js';
 import type { MapData } from '../shared/game.js';
-import { testMap } from '../shared/game.js';
+import { MOVEMENT_PROTOCOL, testMap } from '../shared/game.js';
 
 const mapId = process.env.PCB_MAP_ID || 'bms';
 if (!/^[a-z0-9_-]+$/.test(mapId)) throw new Error('Invalid PCB_MAP_ID');
@@ -17,7 +17,7 @@ if (process.env.PCB_TEST_MAP === '1') setActiveMap({ ...testMap, boxes: [], spaw
 const app = defineServer({
   rooms: { pcb: defineRoom(GameRoom) },
   express: (router) => {
-    router.get('/api/health', (_req, res) => res.json({ ok: true, map: activeMap.id }));
+    router.get('/api/health', (_req, res) => res.json({ ok: true, map: activeMap.id, movementProtocol: MOVEMENT_PROTOCOL }));
     router.get('/api/map', (_req, res) => res.json(activeMap));
     router.use(express.static(path.resolve('dist')));
     router.get('/{*path}', (_req, res) => res.sendFile(path.resolve('dist/index.html')));
