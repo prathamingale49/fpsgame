@@ -1,7 +1,7 @@
 import * as THREE from 'three';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 import { Client, type Room } from '@colyseus/sdk';
-import { collisionCacheStats, DEV_SCALE, JUMP_HEIGHT_RATIO, PLAYER, initialMotion, MOVEMENT_PROTOCOL, stepMotion, testMap, TICK, WEAPON, tuningForHeight, type Input, type MapData, type Motion } from '../shared/game';
+import { collisionCacheStats, movementYaw, DEV_SCALE, JUMP_HEIGHT_RATIO, PLAYER, initialMotion, MOVEMENT_PROTOCOL, stepMotion, testMap, TICK, WEAPON, tuningForHeight, type Input, type MapData, type Motion, type BoardSide } from '../shared/game';
 import type { MatchState, PlayerState } from '../server/state';
 import './style.css';
 
@@ -41,14 +41,14 @@ const movementTrace = new URLSearchParams(location.search).has('movementTrace');
 const soakTest = new URLSearchParams(location.search).has('soakTest');
 type MovementTrace = { event: string; time: number; seq: number; ack: number; pending: number; predicted: [number, number, number]; authoritative: [number, number, number]; correction: number; yaw: number; forward: number };
 const movementEvents: MovementTrace[] = [];
-const movementSnapshots: { time: number; players: { id: string; ack: number; position: [number, number, number] }[] }[] = [];
+const movementSnapshots: { time: number; players: { id: string; ack: number; side: string; position: [number, number, number] }[] }[] = [];
 let testMove: { remaining: number; yaw: number } | null = null;
 let soakMode = false, soakTick = 0;
 if (soakTest) (window as unknown as { __pcbStartSoak: () => void }).__pcbStartSoak = () => { soakMode = true; soakTick = 0; };
 if (movementTrace) {
   (window as Window & { __pcbMovementTrace?: MovementTrace[] }).__pcbMovementTrace = movementEvents;
   (window as Window & { __pcbMovementSnapshots?: typeof movementSnapshots }).__pcbMovementSnapshots = movementSnapshots;
-  (window as unknown as { __pcbStartMovementTest: (ticks: number, testYaw: number) => void }).__pcbStartMovementTest = (ticks, testYaw) => { testMove = { remaining: ticks, yaw: testYaw }; };
+  (window as unknown as { __pcbStartMovementTest: (ticks: number, testYaw: number) => void }).__pcbStartMovementTest = (ticks, testYaw) => { yaw = testYaw; testMove = { remaining: ticks, yaw: testYaw }; };
 }
 function recordMovement(event: string, ack: number, correctionValue = 0, forward = 0) {
   if (!movementTrace) return;
@@ -105,6 +105,9 @@ let maxPending = 0, maxCorrection = 0;
   gpu,
   cache: collisionCacheStats(map), heapMB: ((performance as Performance & { memory?: { usedJSHeapSize: number } }).memory?.usedJSHeapSize ?? 0) / 1048576,
   position: [local.x, local.y, local.z], authoritative: room?.state.players.get(room.sessionId) ? [room.state.players.get(room.sessionId)!.x, room.state.players.get(room.sessionId)!.y, room.state.players.get(room.sessionId)!.z] : null,
+  side: local.side ?? 'front', authoritativeSide: room?.state.players.get(room.sessionId)?.side,
+  testRemaining: testMove?.remaining ?? 0,
+  cameraRoll: camera.rotation.z, worldRotation: world.rotation.x,
 });
 (window as unknown as { __pcbResetPerfWindow: () => void }).__pcbResetPerfWindow = () => { frameTimes.length = 0; playCorrections.length = 0; };
 let wasReloading = false;
@@ -118,6 +121,12 @@ function boxMesh(box: { min: number[]; max: number[]; name?: string }, mat: THRE
 }
 function buildMap(data: MapData) {
   world.clear(); map = data;
+  const addBackFallback = () => {
+    if (!map.back?.enabled) return;
+    const back = new THREE.Group(); back.rotation.x = Math.PI; back.position.y = -map.back.thickness;
+    for (const box of map.back.boxes) back.add(boxMesh(box, dark));
+    world.add(back);
+  };
   canvas.dataset.modelLoaded = map.model ? 'false' : 'true';
   const board = new THREE.Mesh(new THREE.BoxGeometry(map.width, .45, map.depth), boardMat);
   board.position.y = map.ground - .225; world.add(board);
@@ -143,6 +152,7 @@ function buildMap(data: MapData) {
       world.add(new THREE.Mesh(new THREE.TubeGeometry(curve, 12, .045, 4, false), copper));
     }
     map.boxes.forEach((box, i) => world.add(boxMesh(box, box.name?.startsWith('C') ? red : box.name?.startsWith('U') ? dark : i < 4 ? pale : copper)));
+    addBackFallback();
   } else {
     new GLTFLoader().load(map.model, gltf => {
       gltf.scene.traverse(object => {
@@ -151,7 +161,7 @@ function buildMap(data: MapData) {
         for (const material of materials) if (material.transparent && material.opacity < .5) { material.opacity = .035; material.depthWrite = false; }
       });
       world.add(gltf.scene); canvas.dataset.modelLoaded = 'true';
-    }, undefined, error => { console.error('PCB model load failed', error); canvas.dataset.modelLoaded = 'error'; map.boxes.forEach(box => world.add(boxMesh(box, dark))); });
+    }, undefined, error => { console.error('PCB model load failed', error); canvas.dataset.modelLoaded = 'error'; map.boxes.forEach(box => world.add(boxMesh(box, dark))); addBackFallback(); });
   }
 }
 buildMap(map);
@@ -257,7 +267,7 @@ function syncState(state: MatchState) {
     pending = [];
   }
   if (movementTrace) {
-    movementSnapshots.push({ time: performance.now(), players: [...state.players.entries()].map(([id, p]) => ({ id, ack: p.ack, position: [p.x, p.y, p.z] as [number, number, number] })) });
+    movementSnapshots.push({ time: performance.now(), players: [...state.players.entries()].map(([id, p]) => ({ id, ack: p.ack, side: p.side, position: [p.x, p.y, p.z] as [number, number, number] })) });
     if (movementSnapshots.length > 4000) movementSnapshots.shift();
   }
   snapshot = state;
@@ -267,7 +277,7 @@ function syncState(state: MatchState) {
     if (me.reloading && !wasReloading) sound(570, .22, 'triangle');
     wasReloading = me.reloading;
     const before = local;
-    const authoritative: Motion = { x: me.x, y: me.y, z: me.z, vy: me.vy, grounded: me.grounded, jumpHeld: me.jumpHeld, mantleTarget: me.mantleTarget };
+    const authoritative: Motion = { x: me.x, y: me.y, z: me.z, vy: me.vy, grounded: me.grounded, jumpHeld: me.jumpHeld, mantleTarget: me.mantleTarget, side: me.side as BoardSide, transitionCooldown: me.transitionCooldown, headingOffset: me.headingOffset };
     pending = pending.filter(input => input.seq > me.ack);
     local = pending.reduce((motion, input) => stepMotion(motion, input, map, TICK, undefined, playerTuning), authoritative);
     correction = Math.hypot(local.x - before.x, local.y - before.y, local.z - before.z);
@@ -280,7 +290,7 @@ function syncState(state: MatchState) {
   }
   const present = new Set<string>();
   state.players.forEach((p, id) => {
-    if (id === room!.sessionId || !p.alive || !p.connected) return;
+    if (id === room!.sessionId || !p.alive || !p.connected || p.side !== (local.side ?? 'front')) return;
     present.add(id);
     let entry = remotes.get(id);
     if (!entry) {
@@ -291,7 +301,7 @@ function syncState(state: MatchState) {
       mesh.position.copy(entry.target);
       remotes.set(id, entry);
     }
-    entry.target.set(p.x, p.y, p.z); entry.yaw = p.yaw; entry.hp = p.hp;
+    entry.target.set(p.x, p.y, p.z); entry.yaw = p.yaw + p.headingOffset; entry.hp = p.hp;
   });
   for (const [id, entry] of remotes) if (!present.has(id)) {
     scene.remove(entry.mesh, entry.healthBar);
@@ -302,7 +312,7 @@ function syncState(state: MatchState) {
   state.pickups?.forEach((pickup, id) => {
     let mesh = spoolMeshes.get(id);
     if (!mesh) { mesh = makeSpool(); scene.add(mesh); spoolMeshes.set(id, mesh); }
-    mesh.position.set(pickup.x, pickup.y + .32, pickup.z); mesh.visible = pickup.active;
+    mesh.position.set(pickup.x, pickup.y + .32, pickup.z); mesh.visible = pickup.active && pickup.side === (local.side ?? 'front');
   });
   updateHud();
 }
@@ -331,7 +341,7 @@ async function connect(mode: 'play' | 'create' | 'join' | 'reconnect') {
     history.replaceState(null, '', `?room=${room.roomId}`);
     room.onStateChange(syncState);
     room.onMessage('feed', (msg: { text: string }) => showFeed(msg.text));
-    room.onMessage('shot', (msg: { shooter: string; from: number[]; to: number[]; hit?: string }) => { addTracer(msg.from, msg.to); if (msg.shooter === room?.sessionId && msg.hit) flashHit(); });
+    room.onMessage('shot', (msg: { shooter: string; side: BoardSide; from: number[]; to: number[]; hit?: string }) => { if (msg.side === (local.side ?? 'front')) addTracer(msg.from, msg.to); if (msg.shooter === room?.sessionId && msg.hit) flashHit(); });
     room.onMessage('damage', (msg: { target: string }) => { if (msg.target === room?.sessionId) flashDamage(); });
     room.onMessage('pickup', (msg: { player: string; amount: number }) => { if (msg.player === room?.sessionId) { showFeed(`+${msg.amount} solder rounds`); sound(710, .16, 'sine'); } });
     room.onDrop(() => { recordMovement('drop', me?.ack ?? 0); mouseDown = false; pending = []; lastSentInput = null; showFeed('Connection lost · reconnecting'); });
@@ -407,12 +417,22 @@ function frame(now: number) {
     if (mouseDown && document.pointerLockElement === canvas && me?.alive && !me.reloading && me.ammo > 0 && now - lastShot >= WEAPON.fireInterval * 1000) {
       room.send('shoot'); lastShot = now; gunView.position.z = -.09; gunView.rotation.x = .09; muzzle.visible = true; sound(235, .07);
       const from = [local.x, local.y + playerTuning.eye, local.z];
-      const direction = [-Math.sin(yaw) * Math.cos(pitch), Math.sin(pitch), -Math.cos(yaw) * Math.cos(pitch)];
+      const direction = [-Math.sin(movementYaw(yaw, local)) * Math.cos(pitch), Math.sin(pitch), -Math.cos(movementYaw(yaw, local)) * Math.cos(pitch)];
       addTracer(from, from.map((value, i) => value + direction[i] * 2.5));
     }
     camera.position.set(local.x, local.y + playerTuning.eye, local.z);
     canvas.dataset.position = `${local.x.toFixed(2)},${local.y.toFixed(2)},${local.z.toFixed(2)}`;
-    camera.rotation.order = 'YXZ'; camera.rotation.y = yaw; camera.rotation.x = pitch; camera.rotation.z = 0;
+    camera.rotation.order = 'YXZ'; camera.rotation.y = movementYaw(yaw, local); camera.rotation.x = pitch; camera.rotation.z = 0;
+    const back = local.side === 'back' && map.back?.enabled;
+    world.rotation.x = back ? Math.PI : 0; world.position.y = back ? -map.back!.thickness : 0;
+    canvas.dataset.side = local.side ?? 'front';
+    el('side-label').textContent = (local.side ?? 'front').toUpperCase();
+    // Prediction may switch surfaces before the next snapshot arrives.
+    for (const [id, entry] of remotes) {
+      const visible = snapshot.players.get(id)?.side === (local.side ?? 'front');
+      entry.mesh.visible = visible; entry.healthBar.visible = visible;
+    }
+    for (const [id, mesh] of spoolMeshes) { const pickup = snapshot.pickups.get(id); mesh.visible = !!pickup?.active && pickup.side === (local.side ?? 'front'); }
     gunView.position.z += (0 - gunView.position.z) * Math.min(1, dt * 16);
     gunView.rotation.x += ((me?.reloading ? -.65 : 0) - gunView.rotation.x) * Math.min(1, dt * 12);
     if (now - lastShot > 45) muzzle.visible = false;

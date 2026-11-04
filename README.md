@@ -74,7 +74,7 @@ Both commands start the frontend and server together; you do not need separate t
 
 In the browser, enter a name and click **Create Room** or **Play Now**. You can run around and test jumping with one person; a timed deathmatch starts when two players join. Use **Join Room** and the room code to connect a second player. Each room supports up to eight players.
 
-**No BMS files imported yet?** This is expected: the game shows the prototype circuit. Continue to step 5 to use the actual board.
+The checked-in BMS map loads automatically. If it is missing, the game uses the prototype circuit; step 5 explains regeneration.
 
 ### Development player-scale slider
 
@@ -84,7 +84,9 @@ The normal game now uses a **0.90 mm** player height, chosen after testing on th
 
 The scale is a server-authoritative **room-wide development setting**, not a selectable advantage for individual players. All clients are updated together so player collision and shooting agree. The normal `npm run dev` and production server leave the slider disabled. The flag can also be set explicitly on a non-production server with `PCB_DEV_SCALE=1`; never enable this on a public game server.
 
-Controls: WASD move, mouse aim, left click fire, Space jump or hold Space while moving into a connector ledge to climb, Shift sprint, R reload, Tab scoreboard, F3 performance overlay, Esc unlock pointer. Opponents appear as small rocket-shaped characters with overhead health bars that drain from green toward red as they take damage. Players can fall from PCB edges; environmental deaths count as deaths without awarding a kill. The Solder Blaster has a 30-round magazine and collects reserve ammunition from solder spools around the map. Graphics quality, mouse sensitivity, and sound volume are available under Settings. Matches last five minutes, with unlimited respawns. When the timer ends, the highest kill count wins; ties favor fewer deaths.
+Controls: WASD move, mouse aim, left click fire, Space jump or hold Space while moving into a connector ledge to climb, Shift sprint, R reload, Tab scoreboard, F3 performance overlay, Esc unlock pointer. Opponents appear as small rocket-shaped characters with overhead health bars that drain from green toward red as they take damage. On two-sided boards such as the BMS, crossing any edge wraps you to the other surface at the same physical edge; the FRONT/BACK HUD shows your current surface. The camera stays upright and faces into the board. Health, ammunition, scores and the shared match timer persist. Players and solder pickups interact only on their own surface; you must wrap to the same side to fight. Single-sided boards retain falling deaths without awarding a kill. The Solder Blaster has a 30-round magazine and collects reserve ammunition from solder spools around the map. Graphics quality, mouse sensitivity, and sound volume are available under Settings. Matches last five minutes, with unlimited respawns. When the timer ends, the highest kill count wins; ties favor fewer deaths.
+
+The importer enables two-sided gameplay when the physical bottom has at least 12 collidable parts with summed footprints covering at least 1% of board area. Legacy maps without `back` remain single-sided. Bottom coordinates use a proper 180° X rotation: `(STEP X-cx, substrate bottom-STEP Z, STEP Y-cy)`. Front coordinates use `(STEP X-cx, STEP Z-substrate top, cy-STEP Y)`. The same GLB is rotated by X=π and translated down by the measured substrate thickness for BACK rendering. Reimport older maps to extract bottom geometry; no additional artwork is required.
 
 ## 5. Regenerate the real BMS PCB (optional)
 

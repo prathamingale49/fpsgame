@@ -6,6 +6,7 @@ import occtimportjs from 'occt-import-js';
 import type { Box, MapData, Spawn } from '../shared/game.js';
 import { recolorTop } from './recolor-top.js';
 import { isCollidableComponent } from './collision-rules.js';
+import { bottomBox, protrusionBoxes, makeBoardBack } from './board-surfaces.js';
 
 type CadMesh = { name: string; color?: [number, number, number]; attributes: { position: { array: number[] }; normal: { array: number[] } }; index: { array: number[] } };
 type CadNode = { name: string; meshes: number[]; children: CadNode[] };
@@ -128,10 +129,19 @@ if (csvPath && fs.existsSync(csvPath)) {
   }
 }
 const boxes: Box[] = [];
+const bottomBoxes: Box[] = [];
+const bottomRefs = new Set(components.filter(c => /bottom/i.test(c.layer)).map(c => c.ref));
 for (const node of nodes) {
   const ids = nodeMeshes(node).filter(id => id !== boardIndex);
   if (!ids.length) continue;
   const b = ids.map(id => meshBounds[id]).reduce(union);
+  if (bottomRefs.has(node.name) || b.max[2] <= board.min[2] + .05) {
+    // Preserve the established enclosing boxes for genuine bottom components.
+    const backBox = bottomBox(b, board, node.name);
+    if (backBox) bottomBoxes.push(backBox);
+  } else if (b.min[2] < board.min[2] - .2 && (b.max[0] - b.min[0]) * (b.max[1] - b.min[1]) <= width * depth * .25) {
+    bottomBoxes.push(...protrusionBoxes(ids.map(id => cad.meshes[id]), board, node.name));
+  }
   const height = b.max[2] - boardTop, w = b.max[0] - b.min[0], d = b.max[1] - b.min[1];
   if (!isCollidableComponent(height, w, d, width * depth)) continue;
   const connector = /^J\d+$/i.test(node.name) && height >= 3 && height <= 12 && Math.min(w, d) >= 4;
@@ -171,7 +181,9 @@ const clearance = (spawn: Spawn) => Math.min(...boxes.map(b => Math.hypot(Math.m
 const firstSpawn = spawns.reduce((best, spawn, index) => clearance(spawn) > clearance(spawns[best]) ? index : best, 0);
 spawns.unshift(spawns.splice(firstSpawn, 1)[0]);
 const map: MapData = { id: mapId, title: mapId === 'bms' ? 'YJSP Battery Management System · Rev 4' : `${mapId.toUpperCase()} PCB`, width, depth, ground: 0, boxes, spawns, components, model: `/maps/${mapId}.glb`, texture: topPath ? `/maps/${mapId}-top.png` : undefined };
+map.back = makeBoardBack(bottomBoxes, boardTop - board.min[2], width * depth);
 fs.writeFileSync(path.join(output, `${mapId}.json`), JSON.stringify(map));
+console.log(`Back surface: ${bottomBoxes.length} boxes, thickness ${map.back.thickness.toFixed(3)} mm, enabled=${map.back.enabled}`);
 if (topPath && fs.existsSync(topPath)) {
   fs.copyFileSync(topPath, path.join(output, `${mapId}-top-original.png`));
   recolorTop(topPath, path.join(output, `${mapId}-top.png`));

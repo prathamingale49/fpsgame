@@ -10,6 +10,7 @@
     "start": "node dist-server/main.js",
     "test": "vitest run --config vitest.config.ts",
     "test:browser": "tsx tools/browser-check.ts",
+    "test:backside": "tsx tools/backside-browser.ts",
     "test:movement": "tsx tools/movement-suite.ts",
     "test:soak": "tsx tools/soak-gameplay.ts",
     "import:step": "tsx tools/import-step.ts",
