@@ -13,6 +13,12 @@ npm run dev
 
 Open `http://localhost:5173`. Use **Create Room** and share the room link, or use **Play Now** to join an open room. Each room holds up to eight players. A match begins when two join. For internet play, run the server on a publicly reachable host and share its HTTPS URL; the WebSocket endpoint uses the same host and port in production.
 
+### Development player-scale slider
+
+To try different miniature player sizes without recompiling, run `npm run dev:scale` instead of `npm run dev`. Join or create a room (one player is enough to test movement), then press **F4** to open the player-scale panel. Pointer lock releases so you can drag the height slider between **0.75 and 2.25 mm** in 0.05 mm steps. Release the slider to apply a size, then click **Close & Resume**. The panel displays the jump apex in millimeters; jump height remains approximately **1.63× player height** (matching the original jump in the fixed-step physics simulation), and collision radius, eye height, movement speed, rendered avatars, and weapon size scale proportionally. F3 shows the current authoritative height alongside the performance metrics.
+
+The scale is a server-authoritative **room-wide development setting**, not a selectable advantage for individual players. All clients are updated together so player collision and shooting agree. The normal `npm run dev` and production server leave the slider disabled. The flag can also be set explicitly on a non-production server with `PCB_DEV_SCALE=1`; never enable this on a public game server.
+
 Controls: WASD move, mouse aim, left click fire, Space jump, Shift sprint, R reload, Tab scoreboard, F3 performance overlay, Esc unlock pointer. The Solder Blaster has a 30-round magazine and collects reserve ammunition from solder spools around the map. Graphics quality, mouse sensitivity, and sound volume are available under Settings. Matches last five minutes, with unlimited respawns. When the timer ends, the highest kill count wins; ties favor fewer deaths.
 
 ## Import the BMS assembly

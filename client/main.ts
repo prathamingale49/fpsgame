@@ -1,7 +1,7 @@
 import * as THREE from 'three';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 import { Client, type Room } from '@colyseus/sdk';
-import { EYE_HEIGHT, initialMotion, MOVEMENT_PROTOCOL, stepMotion, testMap, TICK, WEAPON, type Input, type MapData, type Motion } from '../shared/game';
+import { DEV_SCALE, JUMP_HEIGHT_RATIO, PLAYER, initialMotion, MOVEMENT_PROTOCOL, stepMotion, testMap, TICK, WEAPON, tuningForHeight, type Input, type MapData, type Motion } from '../shared/game';
 import type { MatchState, PlayerState } from '../server/state';
 import './style.css';
 
@@ -27,6 +27,8 @@ const playerMaterials = ['#dd704e', '#82cddd', '#c9dc6b', '#c999e6', '#f3c669', 
 let map: MapData = testMap;
 let room: Room<MatchState> | null = null;
 let local: Motion = initialMotion(testMap.spawns[0]);
+let playerTuning = tuningForHeight(PLAYER.height);
+let devScaleEnabled = false;
 let yaw = 0, pitch = 0, seq = 0, mouseDown = false, lastShot = 0;
 let sensitivity = Number(localStorage.getItem('pcb-sensitivity')) || .0022;
 let volume = Number(localStorage.getItem('pcb-volume') ?? '.25');
@@ -53,6 +55,37 @@ const shots: { line: THREE.LineSegments | THREE.Line; born: number }[] = [];
 const spoolMeshes = new Map<string, THREE.Group>();
 let correction = 0, collisionChecks = 0, ping = 0;
 const debug = document.createElement('div'); debug.id = 'perf-debug'; debug.hidden = true; el('app').append(debug);
+const scalePanel = document.createElement('aside');
+scalePanel.id = 'scale-debug'; scalePanel.hidden = true;
+scalePanel.innerHTML = `<div class="scale-debug-header"><strong>DEV · PLAYER SCALE</strong><button id="scale-close" type="button">×</button></div>
+  <label for="scale-height">PLAYER HEIGHT <output id="scale-value">1.80 mm</output></label>
+  <input id="scale-height" type="range" min="${DEV_SCALE.min}" max="${DEV_SCALE.max}" step="${DEV_SCALE.step}" value="${PLAYER.height}">
+  <div id="scale-metrics"></div>
+  <p>Shared by the entire room. Jump apex and movement speed scale with player height. Release the slider to apply.</p>
+  <button id="scale-resume" type="button">CLOSE &amp; RESUME</button>`;
+el('app').append(scalePanel);
+const scaleSlider = el<HTMLInputElement>('scale-height');
+const scaleValue = el<HTMLOutputElement>('scale-value');
+const scaleMetrics = el<HTMLDivElement>('scale-metrics');
+function updateScaleReadout(height: number) {
+  const tuning = tuningForHeight(height);
+  scaleValue.textContent = `${height.toFixed(2)} mm`;
+  scaleMetrics.textContent = `JUMP APEX ${(height * JUMP_HEIGHT_RATIO).toFixed(2)} mm (${JUMP_HEIGHT_RATIO.toFixed(2)}× height) · SPRINT ${tuning.sprintSpeed.toFixed(1)} mm/s · HITBOX ${(tuning.radius * 2).toFixed(2)} mm`;
+}
+updateScaleReadout(PLAYER.height);
+scaleSlider.addEventListener('input', () => updateScaleReadout(Number(scaleSlider.value)));
+scaleSlider.addEventListener('change', () => { if (room && devScaleEnabled) room.send('dev:scale', { height: Number(scaleSlider.value) }); });
+function closeScalePanel() { scalePanel.hidden = true; if (room) void canvas.requestPointerLock(); }
+el('scale-close').onclick = closeScalePanel;
+el('scale-resume').onclick = closeScalePanel;
+function applyPlayerHeight(height: number) {
+  playerTuning = tuningForHeight(height);
+  scaleSlider.value = height.toFixed(2);
+  updateScaleReadout(height);
+  const scale = height / PLAYER.height;
+  gunView.scale.setScalar(.75 * scale);
+  remotes.forEach(entry => entry.mesh.scale.setScalar(.75 * scale));
+}
 let showDebug = false, fpsFrames = 0, fpsStart = performance.now(), lastFrameTime = 0, renderCpuMs = 0;
 let wasReloading = false;
 let playerColorIndex = 0;
@@ -112,7 +145,7 @@ function makePlayer(index: number): THREE.Group {
   const head = new THREE.Mesh(new THREE.SphereGeometry(.37, 12, 8), pale); head.position.y = 1.83; group.add(head);
   const visor = new THREE.Mesh(new THREE.BoxGeometry(.52, .22, .08), dark); visor.position.set(0, 1.88, -.34); group.add(visor);
   const gun = new THREE.Mesh(new THREE.BoxGeometry(.15, .14, .9), dark); gun.position.set(.32, 1.32, -.52); group.add(gun);
-  group.scale.setScalar(.75);
+  group.scale.setScalar(.75 * playerTuning.height / PLAYER.height);
   return group;
 }
 const gunView = new THREE.Group(); camera.add(gunView); scene.add(camera);
@@ -184,6 +217,11 @@ function escapeHtml(s: string) { return s.replace(/[&<>"']/g, c => ({ '&': '&amp
 
 function syncState(state: MatchState) {
   if (!state?.players) return;
+  if (state.playerHeight > 0 && Math.abs(state.playerHeight - playerTuning.height) > .0001) {
+    applyPlayerHeight(state.playerHeight);
+    // Never replay inputs predicted with the previous collision and jump parameters.
+    pending = [];
+  }
   if (movementTrace) {
     movementSnapshots.push({ time: performance.now(), players: [...state.players.entries()].map(([id, p]) => ({ id, ack: p.ack, position: [p.x, p.y, p.z] as [number, number, number] })) });
     if (movementSnapshots.length > 4000) movementSnapshots.shift();
@@ -197,7 +235,7 @@ function syncState(state: MatchState) {
     const before = local;
     const authoritative: Motion = { x: me.x, y: me.y, z: me.z, vy: me.vy, grounded: me.grounded };
     pending = pending.filter(input => input.seq > me.ack);
-    local = pending.reduce((motion, input) => stepMotion(motion, input, map), authoritative);
+    local = pending.reduce((motion, input) => stepMotion(motion, input, map, TICK, undefined, playerTuning), authoritative);
     correction = Math.hypot(local.x - before.x, local.y - before.y, local.z - before.z);
     recordMovement('snapshot', me.ack, correction);
     if (!me.alive) { local = authoritative; pending = []; }
@@ -227,8 +265,9 @@ async function connect(mode: 'play' | 'create' | 'join' | 'reconnect') {
   const code = el<HTMLInputElement>('code').value.trim().toUpperCase();
   try {
     if (mode === 'join' && !code) { el('error').textContent = 'Enter a room code.'; return; }
-    const health = await (await fetch('/api/health')).json() as { movementProtocol?: number };
+    const health = await (await fetch('/api/health')).json() as { movementProtocol?: number; devScaleEnabled?: boolean };
     if (health.movementProtocol !== MOVEMENT_PROTOCOL) throw new Error('Game server version differs from this page. Restart the server and refresh.');
+    devScaleEnabled = health.devScaleEnabled === true;
     const token = sessionStorage.getItem('pcb-reconnection-token');
     const options = { name, protocol: MOVEMENT_PROTOCOL };
     room = mode === 'reconnect' && token ? await client.reconnect<MatchState>(token) : mode === 'join' ? await client.joinById<MatchState>(code, options) : mode === 'create' ? await client.create<MatchState>('pcb', options) : await client.joinOrCreate<MatchState>('pcb', options);
@@ -247,10 +286,11 @@ async function connect(mode: 'play' | 'create' | 'join' | 'reconnect') {
     room.onMessage('pickup', (msg: { player: string; amount: number }) => { if (msg.player === room?.sessionId) { showFeed(`+${msg.amount} solder rounds`); sound(710, .16, 'sine'); } });
     room.onDrop(() => { recordMovement('drop', me?.ack ?? 0); mouseDown = false; pending = []; showFeed('Connection lost · reconnecting'); });
     room.onReconnect(() => { const ack = room!.state.players.get(room!.sessionId)?.ack ?? seq; recordMovement('reconnect', ack); pending = []; seq = ack; sessionStorage.setItem('pcb-reconnection-token', room!.reconnectionToken); syncState(room!.state); showFeed('Connection restored'); });
-    room.onLeave(() => { sessionStorage.removeItem('pcb-reconnection-token'); room = null; el('menu').classList.remove('hidden'); el('hud').classList.add('hidden'); document.exitPointerLock(); showFeed('Disconnected from room'); });
+    room.onLeave(() => { sessionStorage.removeItem('pcb-reconnection-token'); room = null; scalePanel.hidden = true; el('menu').classList.remove('hidden'); el('hud').classList.add('hidden'); document.exitPointerLock(); showFeed('Disconnected from room'); });
     sessionStorage.setItem('pcb-reconnection-token', room.reconnectionToken);
     if (room.state?.players) syncState(room.state);
     el('menu').classList.add('hidden'); el('hud').classList.remove('hidden');
+    if (devScaleEnabled) showFeed('DEV SCALE enabled · press F4 to adjust height');
     if (mode === 'reconnect') el('pause').classList.remove('hidden'); else void canvas.requestPointerLock();
   } catch (error) { if (mode === 'reconnect') sessionStorage.removeItem('pcb-reconnection-token'); el('error').textContent = error instanceof Error ? error.message : String(error); }
 }
@@ -268,7 +308,7 @@ el('settings-toggle').onclick = () => {
 };
 const invite = new URLSearchParams(location.search).get('room'); if (invite) el<HTMLInputElement>('code').value = invite.toUpperCase();
 if (sessionStorage.getItem('pcb-reconnection-token')) void connect('reconnect');
-document.addEventListener('keydown', e => { keys.add(e.code); if (e.code === 'F3') { e.preventDefault(); showDebug = !showDebug; debug.hidden = !showDebug; fpsFrames = 0; fpsStart = performance.now(); } if (e.code === 'Tab') { e.preventDefault(); el('scoreboard').classList.remove('hidden'); } if (e.code === 'KeyR' && room && !e.repeat) room.send('reload'); });
+document.addEventListener('keydown', e => { keys.add(e.code); if (e.code === 'F3') { e.preventDefault(); showDebug = !showDebug; debug.hidden = !showDebug; fpsFrames = 0; fpsStart = performance.now(); } if (e.code === 'F4' && devScaleEnabled && room && !e.repeat) { e.preventDefault(); scalePanel.hidden = !scalePanel.hidden; if (!scalePanel.hidden && document.pointerLockElement === canvas) document.exitPointerLock(); } if (e.code === 'Tab') { e.preventDefault(); el('scoreboard').classList.remove('hidden'); } if (e.code === 'KeyR' && room && !e.repeat) room.send('reload'); });
 document.addEventListener('keyup', e => { keys.delete(e.code); if (e.code === 'Tab') el('scoreboard').classList.add('hidden'); });
 document.addEventListener('mousemove', e => { if (document.pointerLockElement !== canvas) return; yaw -= e.movementX * sensitivity; pitch = Math.max(-1.4, Math.min(1.4, pitch - e.movementY * sensitivity)); });
 canvas.addEventListener('mousedown', e => { if (e.button === 0) { if (document.pointerLockElement !== canvas) canvas.requestPointerLock(); mouseDown = true; } });
@@ -285,7 +325,7 @@ setInterval(() => {
   const locked = document.pointerLockElement === canvas;
   const input: Input = { seq: ++seq, forward: locked ? Number(keys.has('KeyW')) - Number(keys.has('KeyS')) : 0, strafe: locked ? Number(keys.has('KeyD')) - Number(keys.has('KeyA')) : 0, yaw, pitch, jump: locked && keys.has('Space'), sprint: locked && (keys.has('ShiftLeft') || keys.has('ShiftRight')) };
   const stats = { collisionChecks: 0 };
-  local = stepMotion(local, input, map, TICK, stats); collisionChecks += stats.collisionChecks;
+  local = stepMotion(local, input, map, TICK, stats, playerTuning); collisionChecks += stats.collisionChecks;
   pending.push(input); if (pending.length > 2048) pending.shift();
   room.send('input', input);
   recordMovement('input', me.ack, 0, input.forward);
@@ -298,11 +338,11 @@ function frame(now: number) {
     const me = snapshot.players.get(room.sessionId);
     if (mouseDown && document.pointerLockElement === canvas && me?.alive && !me.reloading && me.ammo > 0 && now - lastShot >= WEAPON.fireInterval * 1000) {
       room.send('shoot'); lastShot = now; gunView.position.z = -.09; gunView.rotation.x = .09; muzzle.visible = true; sound(235, .07);
-      const from = [local.x, local.y + EYE_HEIGHT, local.z];
+      const from = [local.x, local.y + playerTuning.eye, local.z];
       const direction = [-Math.sin(yaw) * Math.cos(pitch), Math.sin(pitch), -Math.cos(yaw) * Math.cos(pitch)];
       addTracer(from, from.map((value, i) => value + direction[i] * 2.5));
     }
-    camera.position.set(local.x, local.y + EYE_HEIGHT, local.z);
+    camera.position.set(local.x, local.y + playerTuning.eye, local.z);
     canvas.dataset.position = `${local.x.toFixed(2)},${local.y.toFixed(2)},${local.z.toFixed(2)}`;
     camera.rotation.order = 'YXZ'; camera.rotation.y = yaw; camera.rotation.x = pitch; camera.rotation.z = 0;
     gunView.position.z += (0 - gunView.position.z) * Math.min(1, dt * 16);
@@ -317,7 +357,7 @@ function frame(now: number) {
   if (canvas.width !== Math.round(width * renderer.getPixelRatio()) || canvas.height !== Math.round(height * renderer.getPixelRatio())) { renderer.setSize(width, height, false); camera.aspect = width / height; camera.updateProjectionMatrix(); }
   const renderStart = performance.now(); renderer.render(scene, camera); renderCpuMs = performance.now() - renderStart;
   if (showDebug && now - fpsStart >= 500) {
-    debug.textContent = `FPS ${(fpsFrames * 1000 / (now - fpsStart)).toFixed(0)}\nFrame ${lastFrameTime.toFixed(1)} ms\nRender CPU ${renderCpuMs.toFixed(1)} ms\nPing ${ping.toFixed(0)} ms\nCorrection ${correction.toFixed(3)} mm\nCollision checks ${collisionChecks}\nPending inputs ${pending.length}\nDraw calls ${renderer.info.render.calls}\nTriangles ${renderer.info.render.triangles}`;
+    debug.textContent = `FPS ${(fpsFrames * 1000 / (now - fpsStart)).toFixed(0)}\nFrame ${lastFrameTime.toFixed(1)} ms\nRender CPU ${renderCpuMs.toFixed(1)} ms\nPing ${ping.toFixed(0)} ms\nCorrection ${correction.toFixed(3)} mm\nPlayer height ${playerTuning.height.toFixed(2)} mm\nJump apex ${(playerTuning.height * JUMP_HEIGHT_RATIO).toFixed(2)} mm\nCollision checks ${collisionChecks}\nPending inputs ${pending.length}\nDraw calls ${renderer.info.render.calls}\nTriangles ${renderer.info.render.triangles}`;
     fpsFrames = 0; fpsStart = now; collisionChecks = 0;
   }
 }
