@@ -1,5 +1,5 @@
 export const TICK = 1 / 60;
-export const MOVEMENT_PROTOCOL = 3;
+export const MOVEMENT_PROTOCOL = 4;
 export const MATCH_SECONDS = 300;
 export const RESPAWN_SECONDS = 2.5;
 export type PlayerTuning = { radius: number; height: number; eye: number; walkSpeed: number; sprintSpeed: number; jumpSpeed: number; gravity: number; mantleSpeed: number; mantleReach: number; fallDeathDepth: number };
@@ -34,7 +34,8 @@ export type BoardSide = 'front' | 'back';
 export type BoardBack = { boxes: Box[]; thickness: number; enabled: boolean };
 export type MapData = { id: string; title: string; width: number; depth: number; ground: number; boxes: Box[]; spawns: Spawn[]; back?: BoardBack; model?: string; texture?: string; components?: { ref: string; x: number; z: number; rotation: number; layer: string }[] };
 export type Input = { seq: number; forward: number; strafe: number; yaw: number; pitch: number; jump: boolean; sprint: boolean };
-export type Motion = { x: number; y: number; z: number; vy: number; grounded: boolean; jumpHeld: boolean; mantleTarget: number; side?: BoardSide; transitionCooldown?: number };
+export type Motion = { x: number; y: number; z: number; vy: number; grounded: boolean; jumpHeld: boolean; mantleTarget: number; side?: BoardSide; transitionCooldown?: number; headingOffset?: number };
+export function movementYaw(yaw: number, motion: Motion): number { return yaw + (motion.headingOffset ?? 0); }
 
 const surfaceMaps = new WeakMap<MapData, MapData>();
 export function surfaceMap(map: MapData, side: BoardSide = 'front'): MapData {
@@ -45,7 +46,10 @@ export function surfaceMap(map: MapData, side: BoardSide = 'front'): MapData {
 }
 
 export function transitionEdge(motion: Motion, map: MapData, tuning: PlayerTuning): Motion {
-  if (!map.back?.enabled || (motion.transitionCooldown ?? 0) > 0) return motion;
+  if (!map.back?.enabled) return motion;
+  if ((motion.transitionCooldown ?? 0) > 0) return { ...motion,
+    x: clamp(motion.x, -map.width / 2 + tuning.radius, map.width / 2 - tuning.radius),
+    z: clamp(motion.z, -map.depth / 2 + tuning.radius, map.depth / 2 - tuning.radius) };
   const xOutside = Math.abs(motion.x) > map.width / 2;
   const zOutside = Math.abs(motion.z) > map.depth / 2;
   if (!xOutside && !zOutside) return motion;
@@ -56,7 +60,10 @@ export function transitionEdge(motion: Motion, map: MapData, tuning: PlayerTunin
   const z = clamp(-motion.z, -map.depth / 2 + margin, map.depth / 2 - margin);
   let y = map.ground;
   for (const box of surfaceMap(map, side).boxes) if (touches(x, z, box, tuning.radius + .02)) y = Math.max(y, box.max[1]);
-  return { ...motion, x, z, y: y + .02, vy: 0, grounded: false, mantleTarget: 0, side, transitionCooldown: .25 };
+  // X edges retain their sign in the rotated frame: turn the view inward.
+  // Z edges swap signs, so their existing view already faces inward.
+  const headingOffset = xOutside ? ((motion.headingOffset ?? 0) + Math.PI) % (2 * Math.PI) : (motion.headingOffset ?? 0);
+  return { ...motion, x, z, y: y + .02, vy: 0, grounded: false, mantleTarget: 0, side, headingOffset, transitionCooldown: .25 };
 }
 
 export const testMap: MapData = {
@@ -70,7 +77,7 @@ export const testMap: MapData = {
 };
 
 export function clamp(value: number, lo: number, hi: number): number { return Math.max(lo, Math.min(hi, value)); }
-export function initialMotion(spawn: Spawn): Motion { return { x: spawn[0], y: spawn[1], z: spawn[2], vy: 0, grounded: true, jumpHeld: false, mantleTarget: 0 }; }
+export function initialMotion(spawn: Spawn): Motion { return { x: spawn[0], y: spawn[1], z: spawn[2], vy: 0, grounded: true, jumpHeld: false, mantleTarget: 0, side: 'front', transitionCooldown: 0, headingOffset: 0 }; }
 export function validInput(v: unknown): v is Input {
   if (!v || typeof v !== 'object') return false;
   const a = v as Record<string, unknown>;
@@ -121,6 +128,7 @@ function overlaps(x: number, y: number, z: number, box: Box, tuning: PlayerTunin
 
 export function stepMotion(previous: Motion, input: Input, map: MapData, dt = TICK, stats?: MotionStats, tuning: PlayerTuning = PLAYER): Motion {
   const rootMap = map;
+  input = { ...input, yaw: movementYaw(input.yaw, previous) };
   map = surfaceMap(map, previous.side);
   const out = { ...previous, transitionCooldown: Math.max(0, (previous.transitionCooldown ?? 0) - dt) };
   const f = input.forward, s = input.strafe;
@@ -198,11 +206,12 @@ export function rayPlayer(ray: Ray, player: Motion, tuning: PlayerTuning = PLAYE
   const box: Box = { min: [player.x - tuning.radius, player.y, player.z - tuning.radius], max: [player.x + tuning.radius, player.y + tuning.height, player.z + tuning.radius] };
   return rayBox(ray, box);
 }
-export function hitscan(ray: Ray, map: MapData, players: Iterable<[string, Motion]>, shooterId: string, tuning: PlayerTuning = PLAYER): { target?: string; distance: number } {
+export function hitscan(ray: Ray, map: MapData, players: Iterable<[string, Motion]>, shooterId: string, tuning: PlayerTuning = PLAYER, side: BoardSide = 'front'): { target?: string; distance: number } {
+  map = surfaceMap(map, side);
   let distance: number = WEAPON.range, target: string | undefined;
   for (const box of map.boxes) distance = Math.min(distance, rayBox(ray, box));
   for (const [id, player] of players) {
-    if (id === shooterId) continue;
+    if (id === shooterId || (player.side ?? 'front') !== side) continue;
     const hit = rayPlayer(ray, player, tuning);
     if (hit < distance) { distance = hit; target = id; }
   }

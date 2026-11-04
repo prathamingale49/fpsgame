@@ -1,5 +1,5 @@
 import { expect, it } from 'vitest';
-import { initialMotion, PLAYER, testMap, transitionEdge, type MapData, type BoardSide } from '../shared/game.js';
+import { initialMotion, PLAYER, testMap, transitionEdge, stepMotion, hitscan, aimRay, type MapData, type BoardSide } from '../shared/game.js';
 
 const map: MapData = { ...testMap, back: { enabled: true, thickness: 1.6, boxes: [] } };
 for (const side of ['front', 'back'] as BoardSide[]) for (const [x, z] of [[51, 12], [-51, 12], [12, 37], [12, -37]]) {
@@ -21,5 +21,29 @@ it('leaves legacy maps and cooldown moves unchanged', () => {
   const motion = initialMotion([51, -1, 12]);
   expect(transitionEdge(motion, testMap, PLAYER)).toBe(motion);
   const cooldown = { ...motion, transitionCooldown: .1 };
-  expect(transitionEdge(cooldown, map, PLAYER)).toBe(cooldown);
+  expect(transitionEdge(cooldown, map, PLAYER).side).toBe('front');
+  expect(transitionEdge(cooldown, map, PLAYER).x).toBeLessThan(50);
+});
+for (const yaw of [0, Math.PI / 2, Math.PI, -Math.PI / 2]) it(`sustains held movement inward after edge wrap at yaw ${yaw}`, () => {
+  const empty = { ...map, width: 20, depth: 20, boxes: [] };
+  let motion = initialMotion([-Math.sin(yaw) * 9.9, 0, -Math.cos(yaw) * 9.9]);
+  const input = { seq: 1, forward: 1, strafe: 0, yaw, pitch: 0, jump: false, sprint: false };
+  let transitions = 0;
+  for (let i = 0; i < 90; i++) {
+    const next = stepMotion(motion, input, empty);
+    if (next.side !== motion.side) transitions++;
+    motion = next;
+  }
+  expect(transitions).toBe(1);
+  expect(motion.side).toBe('back');
+  expect(Math.abs(motion.x)).toBeLessThan(9);
+  expect(Math.abs(motion.z)).toBeLessThan(9);
+});
+it('filters opposite-side targets and selects the current surface geometry', () => {
+  const target = { ...initialMotion([0, 0, -4]), side: 'back' as const };
+  const empty = { ...map, boxes: [] };
+  const ray = aimRay(0, 0, 0, 0, 0);
+  expect(hitscan(ray, empty, [['other', target]], 'me').target).toBeUndefined();
+  expect(hitscan(ray, empty, [['other', target]], 'me', PLAYER, 'back').target).toBe('other');
+  expect(hitscan(ray, { ...empty, back: { ...empty.back!, boxes: [{ min: [-1, 0, -2], max: [1, 2, -1] }] } }, [['other', target]], 'me', PLAYER, 'back').target).toBeUndefined();
 });

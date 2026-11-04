@@ -15,6 +15,10 @@ document (`git log -1`).
 - Shared movement selects independent backside collisions and supports edge
   placement, mirrored physical Z, highest-component clearance, and cooldown.
 - Focused extraction, transition, and existing game tests: 31 passing.
+- Physics integration now turns inward at X edges, preserves inward heading at
+  Z edges, and clamps to board bounds during cooldown. All 15 transition/combat
+  helper tests pass, including 90 consecutive held-forward ticks at each edge.
+- Movement protocol bumped to 4 for side and heading state.
 
 ## Changed files
 
