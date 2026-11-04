@@ -1,7 +1,7 @@
 # Two-sided PCB implementation progress
 
 Branch: `codex/two-sided-pcb`; base: `208d8b8` (latest main at start).
-Previous checkpoint: `f154db1`. Latest checkpoint: the commit containing this
+Previous checkpoint: `71e7221`. Latest checkpoint: the commit containing this
 document (`git log -1`).
 
 ## Completed
@@ -31,6 +31,29 @@ document (`git log -1`).
   front collision array and all original bottom-mounted component boxes.
   One BMS regeneration is running; final map counts/audit/build/full suite
   and actual gap-route verification remain pending.
+- Regeneration complete (one import): BACK 281 -> 381 boxes; FRONT remains
+  exactly 244. J6: 1 -> 16, J9: 1 -> 20, C30: 1 -> 2; MH8 remains 1.
+  Map audit passes with zero invalid boxes. GLB and both artwork PNG hashes
+  exactly match the baseline. Fixed real-BMS routes: x=-16 traverses J6's
+  old footprint from z=49 to 37.3333; x=-6.6 is blocked by a mounting post
+  at z=46.9. These are now automated regression tests.
+- `npx tsx tools/bench-protrusions.ts 2e71b24`: sampled medians per 20,000
+  movement steps 13.09 -> 15.25 ms; geometry checks per step 4.02 -> 4.00.
+  10,000 hitscans 46.20 -> 80.52 ms (about .008 ms/shot after). Offline
+  decomposition introduces no triangle work in gameplay; counts remain modest.
+- Follow-up complete: `npm test` passes all 62 tests; production build and
+  regenerated BMS audit pass. `npm run test:backside` passes FRONT/BACK round
+  trips on all four edges using two browser clients and authoritative snapshots.
+  West BACK landing is now at y=0 in actual empty space; FRONT connector
+  landing remains y=8.83. Local dev-scale server restarted and verified healthy,
+  protocol 4, 381 back boxes. No known blockers; remaining approximation is
+  the connected-region AABB behavior documented above.
+- Follow-up files: `tools/board-surfaces.ts`, `tools/import-step.ts`,
+  `tools/bench-protrusions.ts`, `tests/protrusion-collisions.test.ts`,
+  `assets/public/maps/bms.json`, and this document. No other files changed.
+- Commits: extraction `71a589b`, synthetic tests `d0aae51`, collision snapshots
+  `71e7221`, final regenerated-map checkpoint is the commit containing this
+  entry. Push these commits and update existing PR #3; do not merge.
 
 - Map contract supports optional `back` metadata without changing legacy maps.
 - Importer extracts bottom component bounds from actual STEP substrate bottom.
@@ -74,7 +97,7 @@ do not merge without user approval.
 
 ## Validation and decisions
 
-- `npm test`: 52 passing, including existing gameplay and multiplayer tests.
+- `npm test`: 62 passing after the protrusion follow-up, including existing gameplay and multiplayer tests.
 - Final physics/multiplayer focused repeat: 19 passing.
 - `npm run build` and `npm run audit:map -- bms`: pass. Existing bundle-size
   advisory remains; no invalid back boxes or blocked front spawns.
@@ -90,7 +113,7 @@ do not merge without user approval.
   0/pi at X edges to prevent cumulative float32 drift; Z edges keep heading.
   Input yaw remains unchanged for deterministic replay.
 - Local development server verified healthy: protocol 4, BMS, two-sided enabled,
-  281 back boxes, dev scale enabled. No stale protocol/map is being served.
+  381 back boxes after the follow-up, dev scale enabled. No stale protocol/map is being served.
 - Cooldown, heading and side are replayed from authoritative snapshots. Health,
   ammunition, scores and match state persist; respawns start on FRONT.
 

@@ -79,3 +79,17 @@ it.skipIf(!fs.existsSync('assets/public/maps/bms.json'))('preserves all BMS fron
   expect(hash(map.boxes)).toBe('2c81c930c68ad218bb1699d5a4e4192864d80f6010407b108dfa1a6cd131b7ff');
   expect(hash(map.back!.boxes.filter(b => bottom.has(b.name!)))).toBe('48836c20946b917719941323ccc8d0733b41c3d0fc5ea75f18717db75eb2293e');
 });
+it.skipIf(!fs.existsSync('assets/public/maps/bms.json'))('crosses the real BMS J6 mounting-post gap but collides with its physical post', () => {
+  const map = JSON.parse(fs.readFileSync('assets/public/maps/bms.json', 'utf8')) as MapData;
+  expect(map.back!.boxes.filter(b => b.name === 'J6').length).toBeGreaterThan(2);
+  const traverse = (x: number) => {
+    let p = { ...initialMotion([x, 0, 49]), side: 'back' as const };
+    for (let seq = 1; seq <= 100; seq++) p = stepMotion(p, { seq, forward: 1, strafe: 0, yaw: 0, pitch: 0, jump: false, sprint: false }, map) as typeof p;
+    return p;
+  };
+  // Fixed physical routes through J6's old enclosing footprint, not a search
+  // for whichever corridor happens to pass. The old map blocked both routes.
+  expect(traverse(-16).z).toBeCloseTo(49 - 100 * PLAYER.walkSpeed / 60, 4);
+  expect(traverse(-6.6).z).toBeGreaterThan(46.69);
+  expect(traverse(-6.6).y).toBe(0);
+});
