@@ -14,6 +14,9 @@ const outsideSpawns = map.spawns.filter(([x, , z]) => Math.abs(x) >= map.width /
 const headers = map.boxes.filter(b => b.kind === 'header');
 const connectors = map.boxes.filter(b => b.kind === 'connector');
 const invalidBoxes = map.boxes.filter(b => b.min.some((v, i) => !Number.isFinite(v) || v >= b.max[i]));
+const invalidBackBoxes = (map.back?.boxes ?? []).filter(b => b.min.some((v, i) => !Number.isFinite(v) || !Number.isFinite(b.max[i]) || v >= b.max[i]) || b.min[1] < 0);
+if (map.back) console.log(JSON.stringify({ back: { enabled: map.back.enabled, thickness: map.back.thickness, solids: map.back.boxes.length, invalidBoxes: invalidBackBoxes.length } }));
+if (invalidBackBoxes.length || (map.back && (!Number.isFinite(map.back.thickness) || map.back.thickness <= 0))) process.exitCode = 1;
 const named = new Set(map.boxes.map(b => b.name));
 const matched = (map.components ?? []).filter(c => named.has(c.ref));
 const files = [map.model, map.texture].filter((url): url is string => Boolean(url)).map(url => { const name = path.basename(url); return { name, bytes: fs.statSync(path.join(directory, name)).size }; });

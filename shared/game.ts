@@ -62,7 +62,9 @@ export function transitionEdge(motion: Motion, map: MapData, tuning: PlayerTunin
   for (const box of surfaceMap(map, side).boxes) if (touches(x, z, box, tuning.radius + .02)) y = Math.max(y, box.max[1]);
   // X edges retain their sign in the rotated frame: turn the view inward.
   // Z edges swap signs, so their existing view already faces inward.
-  const headingOffset = xOutside ? ((motion.headingOffset ?? 0) + Math.PI) % (2 * Math.PI) : (motion.headingOffset ?? 0);
+  // Snap the two orientations so synchronized float32 round-off cannot
+  // accumulate over an unlimited number of wraps.
+  const headingOffset = xOutside ? ((motion.headingOffset ?? 0) > 1 ? 0 : Math.PI) : (motion.headingOffset ?? 0);
   return { ...motion, x, z, y: y + .02, vy: 0, grounded: false, mantleTarget: 0, side, headingOffset, transitionCooldown: .25 };
 }
 

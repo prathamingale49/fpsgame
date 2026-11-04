@@ -1,7 +1,7 @@
 # Two-sided PCB implementation progress
 
 Branch: `codex/two-sided-pcb`; base: `208d8b8` (latest main at start).
-Previous checkpoint: `1d125b1`. Latest checkpoint: the commit containing this
+Previous checkpoint: `5298915`. Latest checkpoint: the commit containing this
 document (`git log -1`).
 
 ## Completed
@@ -33,22 +33,47 @@ document (`git log -1`).
 
 ## Changed files
 
-`shared/game.ts`, `tools/board-surfaces.ts`, `tools/import-step.ts`,
-`tests/board-surfaces.test.ts`, `tests/side-transitions.test.ts`, and this document.
+`shared/game.ts`; `server/{room,state}.ts`; `client/{main.ts,index.html}`;
+`tools/{board-surfaces,import-step,audit-map,backside-browser}.ts`;
+`tests/{board-surfaces,side-transitions,side-multiplayer}.test.ts`;
+`tests/fixtures/{side-server,bms-side-server}.ts`; `assets/public/maps/bms.json`;
+`package.json`; `README.md`; this document.
 
 ## Remaining / exact next steps
 
-1. Regenerate BMS once with the revised importer, verify bottom geometry/count.
-2. Integrate heading adjustment / inward placement with cooldown to prevent
-   repeated held-outward-input edge loops. Transition helpers and edge tests
-   exist, but sustained-movement loop prevention still needs integration tests.
-3. Multiplayer integration is implemented; run final full-suite verification.
-4. Rotate the existing model for backside rendering, hide opposite-side players,
-   add FRONT/BACK HUD indicator, keep camera upright.
-5. Run full tests/build and real-browser BMS checks; document behavior; open PR.
+Implementation milestones and the final stricter browser repeat are complete.
+Commit this integration checkpoint, push the branch and open a PR against main.
+Do not merge without user approval.
+
+## Validation and decisions
+
+- `npm test`: 52 passing, including existing gameplay and multiplayer tests.
+- Final physics/multiplayer focused repeat: 19 passing.
+- `npm run build` and `npm run audit:map -- bms`: pass. Existing bundle-size
+  advisory remains; no invalid back boxes or blocked front spawns.
+- `npm run test:browser`: passes with two clients, reconnection, pointer lock,
+  movement/stopping, and zero sampled correction.
+- `npm run test:backside`: real BMS front/back round trips passed at all four
+  edges, including obstructed west-edge landings. Final stricter repeat also
+  passes, waiting for all commanded input ticks to be sent and acknowledged.
+- Screenshots: ignored local `artifacts/bms-{front,back}-{north,south,east,west}.png`.
+  BACK visually inspected: upright components, weapon, HUD and YJSP branding.
+- BACK world transform: X rotation pi, Y translation negative substrate thickness.
+  Camera remains upright in surface-local coordinates. Heading offset snaps to
+  0/pi at X edges to prevent cumulative float32 drift; Z edges keep heading.
+  Input yaw remains unchanged for deterministic replay.
+- Local development server verified healthy: protocol 4, BMS, two-sided enabled,
+  281 back boxes, dev scale enabled. No stale protocol/map is being served.
+- Cooldown, heading and side are replayed from authoritative snapshots. Health,
+  ammunition, scores and match state persist; respawns start on FRONT.
+
+Run `npm install`, then `npm run dev` (or `npm run dev:scale` for F4).
+Open http://localhost:5173. Production: `npm run build` then `npm start`.
 
 ## Known limitations
 
-Generated BMS map regeneration is running. Physics and server integration are
-implemented; renderer/prediction edits are being verified next. Real BMS browser
-verification and the final full suite remain pending.
+No known gameplay blockers. Backside uses STEP geometry/colors without a
+separate bottom artwork texture. Complexity detection is a documented heuristic.
+Browser validation uses Chrome software WebGL, so measured FPS does not
+represent GPU performance. Test fixtures control edge starts and are never
+exposed by the production server.

@@ -17,6 +17,18 @@ it('places the player above the highest obstructing component', () => {
   const obstructed: MapData = { ...map, back: { ...map.back!, boxes: [{ min: [48, 0, -15], max: [50, 8, -10] }] } };
   expect(transitionEdge(initialMotion([51, 0, 12]), obstructed, PLAYER).y).toBeGreaterThan(8);
 });
+it('uses independent movement collisions for each surface', () => {
+  const wall = { min: [-2, 0, -2] as [number, number, number], max: [2, 4, -1] as [number, number, number] };
+  const separate = { ...map, boxes: [wall] };
+  let front = initialMotion([0, 0, 0]);
+  let back = { ...front, side: 'back' as BoardSide };
+  for (let i = 0; i < 60; i++) {
+    const input = { seq: i, forward: 1, strafe: 0, yaw: 0, pitch: 0, jump: false, sprint: false };
+    front = stepMotion(front, input, separate); back = stepMotion(back, input, separate) as typeof back;
+  }
+  expect(front.z).toBeGreaterThan(-1);
+  expect(back.z).toBeLessThan(-6);
+});
 it('leaves legacy maps and cooldown moves unchanged', () => {
   const motion = initialMotion([51, -1, 12]);
   expect(transitionEdge(motion, testMap, PLAYER)).toBe(motion);
@@ -46,4 +58,30 @@ it('filters opposite-side targets and selects the current surface geometry', () 
   expect(hitscan(ray, empty, [['other', target]], 'me').target).toBeUndefined();
   expect(hitscan(ray, empty, [['other', target]], 'me', PLAYER, 'back').target).toBe('other');
   expect(hitscan(ray, { ...empty, back: { ...empty.back!, boxes: [{ min: [-1, 0, -2], max: [1, 2, -1] }] } }, [['other', target]], 'me', PLAYER, 'back').target).toBeUndefined();
+});
+it('repeats front/back crossings indefinitely without changing motion invariants', () => {
+  const empty = { ...map, width: 8, depth: 8, boxes: [] };
+  let motion = initialMotion([0, 0, 0]);
+  let wraps = 0;
+  for (let i = 0; i < 4000; i++) {
+    const next = stepMotion(motion, { seq: i, forward: 1, strafe: 0, yaw: 0, pitch: 0, jump: i % 100 < 10, sprint: true }, empty);
+    if (next.side !== motion.side) wraps++;
+    expect(next.y).toBeGreaterThanOrEqual(0);
+    expect(Number.isFinite(next.y)).toBe(true);
+    motion = next;
+  }
+  expect(wraps).toBeGreaterThan(40);
+});
+it('resolves diagonal corner wraps without a sustained loop', () => {
+  const empty = { ...map, width: 20, depth: 20, boxes: [] };
+  let motion = initialMotion([9.9, 0, -9.9]);
+  let wraps = 0;
+  for (let i = 0; i < 90; i++) {
+    const next = stepMotion(motion, { seq: i, forward: 1, strafe: 0, yaw: -Math.PI / 4, pitch: 0, jump: false, sprint: false }, empty);
+    if (next.side !== motion.side) wraps++;
+    motion = next;
+  }
+  expect(wraps).toBeLessThanOrEqual(2);
+  expect(Math.abs(motion.x)).toBeLessThan(9);
+  expect(Math.abs(motion.z)).toBeLessThan(9);
 });

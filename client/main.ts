@@ -48,7 +48,7 @@ if (soakTest) (window as unknown as { __pcbStartSoak: () => void }).__pcbStartSo
 if (movementTrace) {
   (window as Window & { __pcbMovementTrace?: MovementTrace[] }).__pcbMovementTrace = movementEvents;
   (window as Window & { __pcbMovementSnapshots?: typeof movementSnapshots }).__pcbMovementSnapshots = movementSnapshots;
-  (window as unknown as { __pcbStartMovementTest: (ticks: number, testYaw: number) => void }).__pcbStartMovementTest = (ticks, testYaw) => { testMove = { remaining: ticks, yaw: testYaw }; };
+  (window as unknown as { __pcbStartMovementTest: (ticks: number, testYaw: number) => void }).__pcbStartMovementTest = (ticks, testYaw) => { yaw = testYaw; testMove = { remaining: ticks, yaw: testYaw }; };
 }
 function recordMovement(event: string, ack: number, correctionValue = 0, forward = 0) {
   if (!movementTrace) return;
@@ -106,6 +106,7 @@ let maxPending = 0, maxCorrection = 0;
   cache: collisionCacheStats(map), heapMB: ((performance as Performance & { memory?: { usedJSHeapSize: number } }).memory?.usedJSHeapSize ?? 0) / 1048576,
   position: [local.x, local.y, local.z], authoritative: room?.state.players.get(room.sessionId) ? [room.state.players.get(room.sessionId)!.x, room.state.players.get(room.sessionId)!.y, room.state.players.get(room.sessionId)!.z] : null,
   side: local.side ?? 'front', authoritativeSide: room?.state.players.get(room.sessionId)?.side,
+  testRemaining: testMove?.remaining ?? 0,
   cameraRoll: camera.rotation.z, worldRotation: world.rotation.x,
 });
 (window as unknown as { __pcbResetPerfWindow: () => void }).__pcbResetPerfWindow = () => { frameTimes.length = 0; playCorrections.length = 0; };
@@ -120,6 +121,12 @@ function boxMesh(box: { min: number[]; max: number[]; name?: string }, mat: THRE
 }
 function buildMap(data: MapData) {
   world.clear(); map = data;
+  const addBackFallback = () => {
+    if (!map.back?.enabled) return;
+    const back = new THREE.Group(); back.rotation.x = Math.PI; back.position.y = -map.back.thickness;
+    for (const box of map.back.boxes) back.add(boxMesh(box, dark));
+    world.add(back);
+  };
   canvas.dataset.modelLoaded = map.model ? 'false' : 'true';
   const board = new THREE.Mesh(new THREE.BoxGeometry(map.width, .45, map.depth), boardMat);
   board.position.y = map.ground - .225; world.add(board);
@@ -145,6 +152,7 @@ function buildMap(data: MapData) {
       world.add(new THREE.Mesh(new THREE.TubeGeometry(curve, 12, .045, 4, false), copper));
     }
     map.boxes.forEach((box, i) => world.add(boxMesh(box, box.name?.startsWith('C') ? red : box.name?.startsWith('U') ? dark : i < 4 ? pale : copper)));
+    addBackFallback();
   } else {
     new GLTFLoader().load(map.model, gltf => {
       gltf.scene.traverse(object => {
@@ -153,7 +161,7 @@ function buildMap(data: MapData) {
         for (const material of materials) if (material.transparent && material.opacity < .5) { material.opacity = .035; material.depthWrite = false; }
       });
       world.add(gltf.scene); canvas.dataset.modelLoaded = 'true';
-    }, undefined, error => { console.error('PCB model load failed', error); canvas.dataset.modelLoaded = 'error'; map.boxes.forEach(box => world.add(boxMesh(box, dark))); });
+    }, undefined, error => { console.error('PCB model load failed', error); canvas.dataset.modelLoaded = 'error'; map.boxes.forEach(box => world.add(boxMesh(box, dark))); addBackFallback(); });
   }
 }
 buildMap(map);
