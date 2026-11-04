@@ -27,16 +27,15 @@ For a **fresh clone**, run:
 ```sh
 git clone https://github.com/prathamingale49/fpsgame.git
 cd fpsgame
-git switch feat/dev-player-scale
 ```
 
-The `feat/dev-player-scale` branch contains the F4 slider from [PR #2](https://github.com/prathamingale49/fpsgame/pull/2). It is based on the gameplay-overhaul work from [PR #1](https://github.com/prathamingale49/fpsgame/pull/1). Until those PRs are merged, **the default `main` branch does not contain all of these features**.
+All current gameplay features, including the rocket-shaped players, opponent health bars, and the optional F4 slider, are on **`main`**.
 
 If you **already cloned** the game, open a terminal in its `fpsgame` directory and run:
 
 ```sh
 git fetch origin
-git switch feat/dev-player-scale
+git switch main
 git pull --ff-only
 ```
 
@@ -134,9 +133,9 @@ npm run audit:map -- bms
 
 Then **restart** with `npm run dev:scale` (or `npm run dev`) and refresh http://localhost:5173. The server automatically selects `assets/public/maps/bms.json` when it exists. Check http://localhost:2567/api/health: its `map` field should be `bms` instead of `test`.
 
-If you already imported the BMS previously, **do not import it again**. As long as `bms.json` and `bms.glb` are still in `assets/public/maps/` (plus `bms-top.png` if the JSON references it), just start the game.
+**Important after the small-component collision update:** If you imported a BMS map with an older game version, **re-run the same `npm run import:step` command once** using your original STEP file. The collision boxes live in the generated `bms.json`; pulling new code does **not** update an existing JSON map. This regenerates the GLB and JSON and may take several minutes. Restart both the server and browser afterward. If you have already imported with the updated collision rules, you do not need to repeat the import on every run.
 
-The importer builds simplified collision boxes for top-side components at least 0.8 mm wide and high, and generates safe spawn points. It preserves bottom-side geometry visually, but the underside is **not yet a playable arena**. Collision approximation can make angled components feel wider than they look.
+The importer creates simplified collision boxes for top-side components at least **0.20 mm above the board** with at least **0.35 mm footprint in both dimensions**. This includes ordinary 0402 and 0603 capacitors and resistors while filtering out very thin copper/pad details. It also generates safe spawn points. Bottom-side components remain visible but the underside is **not yet a playable arena**. Collision boxes are axis-aligned approximations, so rotated parts may feel wider than they look.
 
 `bmstop.png` is recolored from Altium layer colors to green solder mask, copper and light silkscreen without moving pixels, then mapped onto the board at its real aspect ratio. The board model retains STEP component placement and approximate material categories.
 
@@ -154,7 +153,7 @@ npm start
 Open **http://localhost:2567** instead of 5173. The Node.js server serves both the compiled frontend and multiplayer backend on one port. If you want the BMS to appear in this version, import it **before** `npm run build`, since Vite copies the map assets into the compiled frontend during the build. `npm start` does not enable the scale slider.
 
 ## 7. Run tests (optional)
-The STEP importer preserves millimeter coordinates, renders top-side components, and creates simplified collision boxes, safe spawns, and climbable tall `J` connectors. The BeagleBone Black (`Q14`) model is largely translucent/non-colliding, while its narrow pin-header rows provide solid cover. Bottom-side components are visible but are not currently playable terrain. Use `npm run audit:map` after importing or changing a board.
+The STEP importer preserves millimeter coordinates, renders top-side components, and creates simplified collision boxes, safe spawns, and climbable tall `J` connectors. At 0.90 mm player height, some tall connectors are intentionally unreachable. The BeagleBone Black (`Q14`) model is largely translucent/non-colliding, while its narrow pin-header rows provide solid cover. Bottom-side components are visible but are not currently playable terrain. Use `npm run audit:map` after importing or changing a board.
 
 ```sh
 npm run build
@@ -188,7 +187,8 @@ To add another board, pass a fourth import argument such as `new-board`, run `np
 | --- | --- |
 | `node` or `npm` not recognized | Install Node.js 22.12+, close and reopen the terminal, then run `node --version`. |
 | Dependency install fails | Run `npm ci` **inside** `fpsgame` where `package-lock.json` exists. Check your network connection and Node.js version. |
-| Browser cannot connect or says server version differs | Both server and frontend must be started from the **same branch**. Stop old instances, run `npm run dev:scale` again, then hard-refresh the page. |
+| Browser cannot connect or says server version differs | Pull the latest `main`, stop old server instances, run `npm run dev` (or `npm run dev:scale` when testing sizes), then hard-refresh the page. |
+| 0402/0603 components are visually present but not solid | Your imported `bms.json` probably predates the reduced collision threshold. Re-run `npm run import:step` with the original STEP file, restart the server, and verify the map is selected at `/api/health`. |
 | `localhost:5173` does not open | Leave `npm run dev` or `npm run dev:scale` running and check its terminal output for an error or port conflict. |
 | F4 slider does not appear | Start with `npm run dev:scale` and **join a room first**. Check `/api/health` for `"devScaleEnabled":true`. |
 | BMS does not appear | Verify `assets/public/maps/bms.json` and `bms.glb` exist; restart the server and confirm `/api/health` says `"map":"bms"`. |

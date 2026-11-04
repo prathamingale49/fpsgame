@@ -5,6 +5,7 @@ import { GLTFExporter } from 'three/addons/exporters/GLTFExporter.js';
 import occtimportjs from 'occt-import-js';
 import type { Box, MapData, Spawn } from '../shared/game.js';
 import { recolorTop } from './recolor-top.js';
+import { isCollidableComponent } from './collision-rules.js';
 
 type CadMesh = { name: string; color?: [number, number, number]; attributes: { position: { array: number[] }; normal: { array: number[] } }; index: { array: number[] } };
 type CadNode = { name: string; meshes: number[]; children: CadNode[] };
@@ -132,7 +133,7 @@ for (const node of nodes) {
   if (!ids.length) continue;
   const b = ids.map(id => meshBounds[id]).reduce(union);
   const height = b.max[2] - boardTop, w = b.max[0] - b.min[0], d = b.max[1] - b.min[1];
-  if (height < .8 || w < .8 || d < .8 || w * d > width * depth * .25) continue;
+  if (!isCollidableComponent(height, w, d, width * depth)) continue;
   const connector = /^J\d+$/i.test(node.name) && height >= 3 && height <= 12 && Math.min(w, d) >= 4;
   boxes.push({ min: [b.min[0] - cx, 0, -(b.max[1] - cy)], max: [b.max[0] - cx, height, -(b.min[1] - cy)], name: node.name,
     ...(connector ? { kind: 'connector' as const, climbable: true } : {}) });
