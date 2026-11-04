@@ -22,6 +22,10 @@ document (`git log -1`).
   box. Curved posts retain conservative corners; a connected nonconvex region
   can still enclose internal empty space. Original .2 mm height / .35 mm
   footprint thresholds remain in force. Boundary-only faces are excluded.
+- Extraction checkpoint: `71a589b`. Synthetic tests verify separate posts in
+  shared/independent meshes, traversable gaps at .90 mm, solid posts and front
+  connectors, welded seams, clipping sloped geometry, and boundary-only faces.
+  Existing bottom extraction tests also pass. BMS regeneration is next.
 
 - Map contract supports optional `back` metadata without changing legacy maps.
 - Importer extracts bottom component bounds from actual STEP substrate bottom.
