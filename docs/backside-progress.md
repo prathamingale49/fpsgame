@@ -26,6 +26,10 @@ document (`git log -1`).
   existing world around X with the measured substrate thickness, keeps camera
   roll zero, filters remote avatars/pickups/tracers and displays FRONT/BACK HUD.
   TypeScript passes. No additional model copies or per-frame geometry rebuilds.
+- BMS regeneration and audit complete: 244 FRONT boxes, 281 BACK boxes,
+  substrate thickness 1.8214848 mm, back enabled. All 260 BottomLayer CSV
+  components match the back geometry; 21 TopLayer through-hole parts also
+  extend below the board. Both header rows and 11 front connectors preserved.
 
 ## Changed files
 
