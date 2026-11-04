@@ -6,6 +6,23 @@ document (`git log -1`).
 
 ## Completed
 
+### Through-hole collision follow-up
+
+- Root cause: component-level mesh union used the above-board connector housing
+  footprint for backside boxes, spanning empty space between protrusions.
+- Extraction now clips triangles below the substrate and welds vertices to
+  identify disconnected regions, including separate pins in a single mesh.
+  Only offline import code changes; gameplay still uses ordinary AABBs.
+- Bottom-mounted component boxes and all front boxes remain unchanged. No
+  rendering/texture, physics, cooldown, scale, networking or deployment changes.
+- Current checkpoint: commit containing this entry (`git log -1`); baseline
+  `2e71b24`. Next: synthetic regression tests, one BMS import, audit/full tests/
+  build, inspect actual connector gaps, push to PR #3.
+- Limitation: each connected below-plane region is enclosed by an axis-aligned
+  box. Curved posts retain conservative corners; a connected nonconvex region
+  can still enclose internal empty space. Original .2 mm height / .35 mm
+  footprint thresholds remain in force. Boundary-only faces are excluded.
+
 - Map contract supports optional `back` metadata without changing legacy maps.
 - Importer extracts bottom component bounds from actual STEP substrate bottom.
 - Bottom coordinates are `(STEP X-cx, substrate bottom-STEP Z, STEP Y-cy)`.
