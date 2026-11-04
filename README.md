@@ -85,7 +85,7 @@ The panel shows the player height, jump apex, sprint speed, and hitbox width in 
 
 The scale is a server-authoritative **room-wide development setting**, not a selectable advantage for individual players. All clients are updated together so player collision and shooting agree. The normal `npm run dev` and production server leave the slider disabled. The flag can also be set explicitly on a non-production server with `PCB_DEV_SCALE=1`; never enable this on a public game server.
 
-Controls: WASD move, mouse aim, left click fire, Space jump, Shift sprint, R reload, Tab scoreboard, F3 performance overlay, Esc unlock pointer. The Solder Blaster has a 30-round magazine and collects reserve ammunition from solder spools around the map. Graphics quality, mouse sensitivity, and sound volume are available under Settings. Matches last five minutes, with unlimited respawns. When the timer ends, the highest kill count wins; ties favor fewer deaths.
+Controls: WASD move, mouse aim, left click fire, Space jump or hold Space while moving into a connector ledge to climb, Shift sprint, R reload, Tab scoreboard, F3 performance overlay, Esc unlock pointer. Players can fall from PCB edges; environmental deaths count as deaths without awarding a kill. The Solder Blaster has a 30-round magazine and collects reserve ammunition from solder spools around the map. Graphics quality, mouse sensitivity, and sound volume are available under Settings. Matches last five minutes, with unlimited respawns. When the timer ends, the highest kill count wins; ties favor fewer deaths.
 
 ## 5. Import the real BMS PCB (optional)
 
@@ -154,15 +154,20 @@ npm start
 Open **http://localhost:2567** instead of 5173. The Node.js server serves both the compiled frontend and multiplayer backend on one port. If you want the BMS to appear in this version, import it **before** `npm run build`, since Vite copies the map assets into the compiled frontend during the build. `npm start` does not enable the scale slider.
 
 ## 7. Run tests (optional)
+The STEP importer preserves millimeter coordinates, renders top-side components, and creates simplified collision boxes, safe spawns, and climbable tall `J` connectors. The BeagleBone Black (`Q14`) model is largely translucent/non-colliding, while its narrow pin-header rows provide solid cover. Bottom-side components are visible but are not currently playable terrain. Use `npm run audit:map` after importing or changing a board.
 
 ```sh
 npm run build
 npm test
 npm run test:browser
 npm run test:movement
+npm run audit:map
+npm run test:soak
 ```
 
-`npm run build` checks TypeScript and builds frontend/backend. `npm test` runs fixed-step physics, scaled jump and hitbox tests, and real two-client Colyseus multiplayer tests. `test:browser` exercises WebGL, joining, reconnection, settings, movement and F3. `test:movement` checks movement prediction and reconciliation at various network delays, and includes the BMS if its files are available. **Browser tests currently expect Chrome at `C:/Program Files/Google/Chrome/Application/chrome.exe`**, so they may require script changes on macOS/Linux. Screenshots and test diagnostics go into the ignored `artifacts/` folder. Performance methodology is in [docs/performance.md](docs/performance.md).
+`npm run build` checks TypeScript and bundles the frontend/backend. `npm test` covers fixed-step physics, scaled jump and hitboxes, connector mantling, edge falls, shooting, ammunition, and real multiplayer sessions including environmental deaths and respawns. `test:browser` checks WebGL and room controls; `test:movement` checks prediction and reconciliation with network delay; `test:soak` runs a three-minute two-client performance session. Browser tests currently expect Chrome at `C:/Program Files/Google/Chrome/Application/chrome.exe`, so scripts may need adjustment on macOS/Linux. Diagnostics go into ignored `artifacts/`; see [docs/performance.md](docs/performance.md).
+
+The soak defaults to SwiftShader for repeatability. On Windows with a working GPU, use `$env:SOAK_RENDERER='hardware'` before `npm run test:soak` to measure the Direct3D 11 ANGLE path.
 
 ## 8. Put the game online (later)
 

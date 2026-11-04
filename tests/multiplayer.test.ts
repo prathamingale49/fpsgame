@@ -62,6 +62,29 @@ describe('real Colyseus clients', () => {
       } finally { await a.leave(); await b.leave(); }
     } finally { devServer.kill(); }
   }, 12000);
+  it('authoritatively kills a player who runs off the PCB and respawns without awarding a kill', async () => {
+    const a = await new Client(`ws://127.0.0.1:${port}`).create<MatchState>('pcb', { name: 'Edge A', protocol: MOVEMENT_PROTOCOL }); rooms.push(a);
+    const b = await new Client(`ws://127.0.0.1:${port}`).joinById<MatchState>(a.roomId, { name: 'Edge B', protocol: MOVEMENT_PROTOCOL }); rooms.push(b);
+    const feed: string[] = []; b.onMessage('feed', (message: { text: string }) => feed.push(message.text));
+    await waitFor(() => a.state.phase === 'playing' && b.state.players.size === 2);
+    let fell = false;
+    for (let seq = 1; seq <= 220; seq++) {
+      a.send('input', { seq, forward: 1, strafe: 0, yaw: 0, pitch: 0, jump: false, sprint: true });
+      await delay(16);
+      if (!a.state.players.get(a.sessionId)?.alive) { fell = true; break; }
+    }
+    expect(fell).toBe(true);
+    await waitFor(() => b.state.players.get(a.sessionId)?.deaths === 1);
+    expect(a.state.players.get(a.sessionId)?.hp).toBe(0);
+    expect(a.state.players.get(b.sessionId)?.kills).toBe(0);
+    expect(feed.some(text => text.includes('Edge A fell off the PCB'))).toBe(true);
+    await waitFor(() => a.state.players.get(a.sessionId)?.alive === true, 4000);
+    const respawn = a.state.players.get(a.sessionId)!;
+    expect(respawn.hp).toBe(100);
+    expect(Math.abs(respawn.x)).toBeLessThan(testMap.width / 2);
+    expect(Math.abs(respawn.z)).toBeLessThan(testMap.depth / 2);
+    await a.leave(); await b.leave();
+  }, 10000);
   it('buffers out-of-order movement and ignores duplicate sequences', async () => {
     const a = await new Client(`ws://127.0.0.1:${port}`).create<MatchState>('pcb', { name: 'Order A', protocol: MOVEMENT_PROTOCOL }); rooms.push(a);
     const b = await new Client(`ws://127.0.0.1:${port}`).joinById<MatchState>(a.roomId, { name: 'Order B', protocol: MOVEMENT_PROTOCOL }); rooms.push(b);

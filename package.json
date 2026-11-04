@@ -11,6 +11,7 @@
     "test": "vitest run --config vitest.config.ts",
     "test:browser": "tsx tools/browser-check.ts",
     "test:movement": "tsx tools/movement-suite.ts",
+    "test:soak": "tsx tools/soak-gameplay.ts",
     "import:step": "tsx tools/import-step.ts",
     "audit:map": "tsx tools/audit-map.ts"
   },

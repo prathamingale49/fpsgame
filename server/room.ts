@@ -1,6 +1,6 @@
 import { Room, type Client } from 'colyseus';
 import { MatchState, PlayerState, PickupState } from './state.js';
-import { aimRay, hitscan, initialMotion, stepMotion, testMap, TICK, MOVEMENT_PROTOCOL, MATCH_SECONDS, RESPAWN_SECONDS, PLAYER, WEAPON, tuningForHeight, validDevHeight, validInput, type Input, type MapData, type Motion, type PlayerTuning } from '../shared/game.js';
+import { aimRay, collisionCacheStats, hitscan, initialMotion, stepMotion, testMap, TICK, MOVEMENT_PROTOCOL, MATCH_SECONDS, RESPAWN_SECONDS, PLAYER, WEAPON, tuningForHeight, validDevHeight, validInput, type Input, type MapData, type Motion, type PlayerTuning } from '../shared/game.js';
 const PLAYER_PICKUP_DISTANCE = .9;
 const TRACE_MOVEMENT = process.env.PCB_MOVEMENT_TRACE === '1';
 export const DEV_SCALE_ENABLED = process.env.PCB_DEV_SCALE === '1' && process.env.NODE_ENV !== 'production';
@@ -8,6 +8,7 @@ export const DEV_SCALE_ENABLED = process.env.PCB_DEV_SCALE === '1' && process.en
 type Runtime = { queue: Map<number, Input>; lastReceived: number; lastSeq: number; credit: number; lastShot: number; reloadAt: number; respawnAt: number };
 export let activeMap: MapData = testMap;
 export function setActiveMap(map: MapData) { activeMap = map; }
+export const serverPerf = { ticks: 0, tickMsTotal: 0, tickMsMax: 0, queueMax: 0, queueTotal: 0, processed: 0, cache: () => collisionCacheStats(activeMap) };
 export function safeName(value: unknown): string {
   return typeof value === 'string' ? value.replace(/[^\p{L}\p{N} _-]/gu, '').trim().slice(0, 18) || 'Engineer' : 'Engineer';
 }
@@ -98,13 +99,21 @@ export class GameRoom extends Room {
 
   private startMatch() {
     this.elapsed = 0; this.state.seconds = this.matchSeconds; this.state.winner = ''; this.state.phase = 'playing';
-    this.state.players.forEach((p) => { p.kills = 0; p.deaths = 0; p.hp = 100; p.alive = true; p.ammo = WEAPON.magazine; p.reserve = WEAPON.reserve; p.reloading = false; });
+    this.state.players.forEach((p) => {
+      if (Math.abs(p.x) >= activeMap.width / 2 || Math.abs(p.z) >= activeMap.depth / 2 || p.y < activeMap.ground - 1) {
+        const spawn = activeMap.spawns[this.spawnIndex++ % activeMap.spawns.length], motion = initialMotion(spawn);
+        p.x = motion.x; p.y = motion.y; p.z = motion.z; p.vy = motion.vy; p.grounded = true;
+      }
+      p.jumpHeld = false; p.mantleTarget = 0;
+      p.kills = 0; p.deaths = 0; p.hp = 100; p.alive = true; p.ammo = WEAPON.magazine; p.reserve = WEAPON.reserve; p.reloading = false;
+    });
     this.runtime.forEach((r, id) => { r.queue.clear(); r.credit = 0; r.lastSeq = r.lastReceived; r.lastShot = -Infinity; r.reloadAt = 0; const p = this.state.players.get(id); if (p) p.ack = r.lastSeq; });
     this.state.pickups.forEach((pickup) => { pickup.active = true; }); this.pickupRespawns.clear();
     this.broadcast('feed', { text: 'Match started' });
   }
 
   private tick() {
+    const workStart = performance.now();
     const now = Date.now() / 1000;
     const tickAt = performance.now();
     const elapsed = Math.max(0, Math.min((tickAt - this.lastTickAt) / 1000, 1));
@@ -135,13 +144,18 @@ export class GameRoom extends Room {
       while (r.credit >= 1 && r.queue.has(r.lastSeq + 1) && processed < 60) {
         const input = r.queue.get(r.lastSeq + 1)!;
         r.queue.delete(input.seq);
-        const motion = stepMotion({ x: p.x, y: p.y, z: p.z, vy: p.vy, grounded: p.grounded }, input, activeMap, TICK, undefined, this.playerTuning);
-        p.x = motion.x; p.y = motion.y; p.z = motion.z; p.vy = motion.vy; p.grounded = motion.grounded;
+        const motion = stepMotion({ x: p.x, y: p.y, z: p.z, vy: p.vy, grounded: p.grounded, jumpHeld: p.jumpHeld, mantleTarget: p.mantleTarget }, input, activeMap, TICK, undefined, this.playerTuning);
+        p.x = motion.x; p.y = motion.y; p.z = motion.z; p.vy = motion.vy; p.grounded = motion.grounded; p.jumpHeld = motion.jumpHeld; p.mantleTarget = motion.mantleTarget;
         p.yaw = input.yaw; p.pitch = input.pitch;
         r.lastSeq = input.seq; p.ack = input.seq; r.credit--; processed++;
+        if (p.y < activeMap.ground - PLAYER.fallDeathDepth) { this.fall(id, now); break; }
         if (TRACE_MOVEMENT) console.log('MOVE_TRACE', JSON.stringify({ event: 'process', player: id, seq: input.seq, ack: p.ack, queue: r.queue.size, position: [p.x, p.y, p.z] }));
       }
+      serverPerf.processed += processed;
+      serverPerf.queueMax = Math.max(serverPerf.queueMax, r.queue.size);
+      serverPerf.queueTotal += r.queue.size;
       if (!r.queue.size) r.credit = Math.min(r.credit, 6);
+      if (!p.alive) return;
       if (p.reserve < WEAPON.maxReserve) this.state.pickups.forEach((pickup, pickupId) => {
         if (!pickup.active || Math.hypot(p.x - pickup.x, p.z - pickup.z) > PLAYER_PICKUP_DISTANCE * this.playerTuning.height / PLAYER.height || Math.abs(p.y - pickup.y) > 1.5 * this.playerTuning.height / PLAYER.height) return;
         p.reserve = Math.min(WEAPON.maxReserve, p.reserve + WEAPON.pickupRounds);
@@ -149,12 +163,23 @@ export class GameRoom extends Room {
         this.broadcast('pickup', { player: id, amount: WEAPON.pickupRounds });
       });
     });
+    const workMs = performance.now() - workStart;
+    serverPerf.ticks++; serverPerf.tickMsTotal += workMs; serverPerf.tickMsMax = Math.max(serverPerf.tickMsMax, workMs);
   }
 
   private reload(id: string) {
     const p = this.state.players.get(id), r = this.runtime.get(id);
     if (!p || !r || !p.alive || p.reloading || p.ammo === WEAPON.magazine || p.reserve === 0) return;
     p.reloading = true; r.reloadAt = Date.now() / 1000 + WEAPON.reloadSeconds;
+  }
+
+  private fall(id: string, now: number) {
+    const p = this.state.players.get(id), r = this.runtime.get(id);
+    if (!p || !r || !p.alive) return;
+    p.hp = 0; p.alive = false; p.deaths++; p.reloading = false; p.mantleTarget = 0;
+    r.respawnAt = now + RESPAWN_SECONDS;
+    r.queue.clear(); r.credit = 0; r.lastSeq = r.lastReceived; p.ack = r.lastSeq;
+    this.broadcast('feed', { text: `${p.name} fell off the PCB` });
   }
 
   private shoot(client: Client) {
@@ -184,7 +209,7 @@ export class GameRoom extends Room {
     const p = this.state.players.get(id); if (!p) return;
     const spawn = activeMap.spawns[this.spawnIndex++ % activeMap.spawns.length];
     const m = initialMotion(spawn);
-    p.x = m.x; p.y = m.y; p.z = m.z; p.vy = 0; p.grounded = true;
+    p.x = m.x; p.y = m.y; p.z = m.z; p.vy = 0; p.grounded = true; p.jumpHeld = false; p.mantleTarget = 0;
     p.hp = 100; p.alive = true; p.ammo = WEAPON.magazine; p.reserve = WEAPON.reserve; p.reloading = false;
     const r = this.runtime.get(id); if (r) { r.queue.clear(); r.credit = 0; r.lastSeq = r.lastReceived; p.ack = r.lastSeq; }
     this.broadcast('feed', { text: `${p.name} respawned` });

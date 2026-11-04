@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import { aimRay, hitscan, initialMotion, JUMP_HEIGHT_RATIO, PLAYER, rayBox, rayPlayer, stepMotion, testMap, TICK, tuningForHeight, validDevHeight, WEAPON, type Input } from '../shared/game';
+import fs from 'node:fs';
+import { aimRay, collisionCacheStats, hitscan, initialMotion, JUMP_HEIGHT_RATIO, PLAYER, rayBox, rayPlayer, stepMotion, testMap, TICK, tuningForHeight, validDevHeight, WEAPON, type Input, type MapData } from '../shared/game';
 
 const input: Input = { seq: 1, forward: 1, strafe: 0, yaw: 0, pitch: 0, jump: false, sprint: false };
 describe('movement', () => {
@@ -33,14 +34,17 @@ describe('movement', () => {
     for (let i = 0; i < 60; i++) m = stepMotion(m, input, testMap, TICK);
     expect(m.z).toBeCloseTo(-PLAYER.walkSpeed, 3); expect(m.y).toBe(0);
   });
-  it('lands after jumping and does not leave the board', () => {
+  it('lands after jumping, then falls beyond the PCB edge', () => {
     let m = stepMotion(initialMotion([0, 0, 0]), { ...input, forward: 0, jump: true }, testMap);
     expect(m.y).toBeGreaterThan(0);
     for (let i = 0; i < 120; i++) m = stepMotion(m, { ...input, forward: 0, jump: false }, testMap);
     expect(m.grounded).toBe(true); expect(m.y).toBe(0);
     m = initialMotion([testMap.width / 2 - .5, 0, 0]);
     for (let i = 0; i < 60; i++) m = stepMotion(m, { ...input, forward: 0, strafe: 1 }, testMap);
-    expect(m.x).toBeLessThan(testMap.width / 2);
+    expect(m.x).toBeGreaterThan(testMap.width / 2);
+    for (let i = 0; i < 90; i++) m = stepMotion(m, { ...input, forward: 0, strafe: 0 }, testMap);
+    expect(m.y).toBeLessThan(-PLAYER.fallDeathDepth);
+    expect(m.grounded).toBe(false);
   });
   it('blocks against components', () => {
     let m = initialMotion([-24, 0, -15]);
@@ -54,6 +58,31 @@ describe('movement', () => {
     expect(m.z).toBeLessThan(-2);
     for (let i = 0; i < 90; i++) m = stepMotion(m, { ...input, forward: 0 }, map);
     expect(m.y).toBeCloseTo(2.5, 2); expect(m.grounded).toBe(true);
+  });
+  it('mantles a marked connector while holding jump and remains on top', () => {
+    const map = { ...testMap, boxes: [{ min: [-3, 0, -6] as [number, number, number], max: [3, 8.5, -3] as [number, number, number], climbable: true, kind: 'connector' as const }] };
+    let m = initialMotion([0, 0, 0]);
+    let climbed = false;
+    for (let i = 0; i < 100; i++) {
+      m = stepMotion(m, { ...input, forward: i < 25 ? 1 : 0, jump: true }, map);
+      if (m.y >= 8.5) climbed = true;
+    }
+    expect(climbed).toBe(true);
+    expect(m.y).toBeCloseTo(8.5, 3);
+    expect(m.grounded).toBe(true);
+    expect(m.z).toBeLessThan(-3);
+    for (let i = 0; i < 50; i++) m = stepMotion(m, { ...input, forward: 0, jump: true }, map);
+    expect(m.y).toBeCloseTo(8.5, 3);
+    const shot = hitscan(aimRay(m.x, m.y, m.z, 0, 0), map, [['opponent', initialMotion([0, 8.5, m.z - 7])]], 'self');
+    expect(shot.target).toBe('opponent');
+  });
+  it('keeps unmarked header cover solid for movement and shots', () => {
+    const header = { min: [-2, 0, -5] as [number, number, number], max: [2, 5, -4] as [number, number, number], kind: 'header' as const };
+    const map = { ...testMap, boxes: [header] };
+    let m = initialMotion([0, 0, 0]);
+    for (let i = 0; i < 90; i++) m = stepMotion(m, { ...input, jump: true }, map);
+    expect(m.z).toBeGreaterThan(-4);
+    expect(hitscan(aimRay(0, 0, 0, 0, 0), map, [['opponent', initialMotion([0, 0, -10])]], 'self').target).toBeUndefined();
   });
   it('normalizes diagonal movement and stops on release', () => {
     const map = { ...testMap, boxes: [] };
@@ -76,6 +105,11 @@ describe('movement', () => {
     stepMotion(initialMotion([0, 0, 0]), input, map, TICK, stats);
     expect(stats.collisionChecks).toBeLessThan(10);
   });
+  it('bounds cached cross-cell collision queries during long traversal', () => {
+    const map = { ...testMap, width: 4000, depth: 200, boxes: Array.from({ length: 1000 }, (_, i) => ({ min: [i * 3, 0, -4] as [number, number, number], max: [i * 3 + 1, 2, -3] as [number, number, number] })) };
+    for (let i = 0; i < 800; i++) stepMotion(initialMotion([i * 2, 0, 0]), { ...input, strafe: 1 }, map);
+    expect(collisionCacheStats(map).queries).toBeLessThanOrEqual(256);
+  });
 });
 describe('combat', () => {
   it('hits player before distant geometry', () => {
@@ -89,5 +123,38 @@ describe('combat', () => {
     const hit = hitscan(aimRay(0, 0, 0, 0, 0), map, [['b', initialMotion([0, 0, -10])]], 'a');
     expect(hit.target).toBeUndefined(); expect(hit.distance).toBeCloseTo(4);
     expect(rayBox(aimRay(0, 0, 0, 0, 0), map.boxes[0])).toBeCloseTo(4);
+  });
+});
+const bmsFile = 'assets/public/maps/bms.json';
+describe.skipIf(!fs.existsSync(bmsFile))('imported BMS collision geometry', () => {
+  const bms = fs.existsSync(bmsFile) ? JSON.parse(fs.readFileSync(bmsFile, 'utf8')) as MapData : testMap;
+  it('turns each long header row into visible-sized cover that stops walking and shots', () => {
+    const headers = bms.boxes.filter(b => b.kind === 'header');
+    expect(headers).toHaveLength(2);
+    for (const header of headers) {
+      expect(header.max[0] - header.min[0]).toBeGreaterThan(50);
+      expect(header.max[2] - header.min[2]).toBeLessThan(6);
+      expect(header.climbable).toBeFalsy();
+      const map = { ...bms, boxes: [header] };
+      const x = (header.min[0] + header.max[0]) / 2;
+      const fromPositive = header.max[2] + 3 < map.depth / 2 - 1;
+      const z = fromPositive ? header.max[2] + 3 : header.min[2] - 3, yaw = fromPositive ? 0 : Math.PI;
+      let player = initialMotion([x, 0, z]);
+      for (let i = 0; i < 90; i++) player = stepMotion(player, { ...input, yaw }, map);
+      expect(fromPositive ? player.z > header.max[2] : player.z < header.min[2]).toBe(true);
+      const targetZ = fromPositive ? header.min[2] - 3 : header.max[2] + 3;
+      const hit = hitscan(aimRay(x, 0, z, yaw, 0), map, [['target', initialMotion([x, 0, targetZ])]], 'shooter');
+      expect(hit.target).toBeUndefined();
+    }
+  });
+  it('lets a player mantle an actual tall BMS connector', () => {
+    const connector = bms.boxes.find(b => b.name === 'J6');
+    expect(connector?.climbable).toBe(true);
+    const map = { ...bms, boxes: [connector!] };
+    const x = (connector!.min[0] + connector!.max[0]) / 2;
+    let player = initialMotion([x, 0, connector!.max[2] + 3]);
+    for (let i = 0; i < 100; i++) player = stepMotion(player, { ...input, forward: i < 40 ? 1 : 0, jump: true }, map);
+    expect(player.y).toBeCloseTo(connector!.max[1], 2);
+    expect(player.grounded).toBe(true);
   });
 });
