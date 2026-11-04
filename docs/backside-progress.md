@@ -22,6 +22,10 @@ document (`git log -1`).
 - Multiplayer milestone: schema/server preserve side, cooldown and heading;
   respawns reset to front; side filters protect shooting and ammo collection.
   Real Colyseus two-client round-trip/combat test passes (5 seconds).
+- Rendering milestone: client reconciles side, cooldown and heading; rotates the
+  existing world around X with the measured substrate thickness, keeps camera
+  roll zero, filters remote avatars/pickups/tracers and displays FRONT/BACK HUD.
+  TypeScript passes. No additional model copies or per-frame geometry rebuilds.
 
 ## Changed files
 
