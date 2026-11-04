@@ -68,7 +68,7 @@ describe('real Colyseus clients', () => {
     const feed: string[] = []; b.onMessage('feed', (message: { text: string }) => feed.push(message.text));
     await waitFor(() => a.state.phase === 'playing' && b.state.players.size === 2);
     let fell = false;
-    for (let seq = 1; seq <= 220; seq++) {
+    for (let seq = 1; seq <= 500; seq++) {
       a.send('input', { seq, forward: 1, strafe: 0, yaw: 0, pitch: 0, jump: false, sprint: true });
       await delay(16);
       if (!a.state.players.get(a.sessionId)?.alive) { fell = true; break; }
@@ -84,7 +84,7 @@ describe('real Colyseus clients', () => {
     expect(Math.abs(respawn.x)).toBeLessThan(testMap.width / 2);
     expect(Math.abs(respawn.z)).toBeLessThan(testMap.depth / 2);
     await a.leave(); await b.leave();
-  }, 10000);
+  }, 16000);
   it('buffers out-of-order movement and ignores duplicate sequences', async () => {
     const a = await new Client(`ws://127.0.0.1:${port}`).create<MatchState>('pcb', { name: 'Order A', protocol: MOVEMENT_PROTOCOL }); rooms.push(a);
     const b = await new Client(`ws://127.0.0.1:${port}`).joinById<MatchState>(a.roomId, { name: 'Order B', protocol: MOVEMENT_PROTOCOL }); rooms.push(b);
@@ -134,19 +134,29 @@ describe('real Colyseus clients', () => {
     expect(a.state.players.get(a.sessionId)?.ammo).toBe(28);
     await waitFor(() => a.state.players.get(a.sessionId)?.ammo === 30, 3000);
     expect(a.state.players.get(a.sessionId)?.reserve).toBe(58);
-    for (let seq = 1; seq <= 34; seq++) {
-      a.send('input', { seq, forward: 0, strafe: 1, yaw: 0, pitch: 0, jump: false, sprint: false, reserve: 120 });
+    // Walk toward the actual pickup, regardless of player spawn or movement scale.
+    const pickup = b.state.pickups.get('0')!;
+    let seq = 0;
+    for (; seq < 900 && a.state.players.get(a.sessionId)!.reserve !== 88; seq++) {
+      const p = a.state.players.get(a.sessionId)!;
+      const dx = pickup.x - p.x, dz = pickup.z - p.z;
+      const dist = Math.hypot(dx, dz);
+      a.send('input', { seq: seq + 1, forward: dist > .01 ? -dz / dist : 0, strafe: dist > .01 ? dx / dist : 0, yaw: 0, pitch: 0, jump: false, sprint: false });
       await delay(17);
     }
     await waitFor(() => a.state.players.get(a.sessionId)?.reserve === 88 && b.state.pickups.get('0')?.active === false);
     expect(b.state.players.get(a.sessionId)?.reserve).toBe(88);
-    for (let seq = 35; seq <= 49; seq++) {
-      a.send('input', { seq, forward: 0, strafe: -1, yaw: 0, pitch: 0, jump: false, sprint: false });
+    // Leave collection range so the short test respawn does not get immediately picked up again.
+    for (let i = 0; i < 14; i++) {
+      const p = a.state.players.get(a.sessionId)!;
+      const dx = p.x - pickup.x, dz = p.z - pickup.z;
+      const dist = Math.max(.01, Math.hypot(dx, dz));
+      a.send('input', { seq: ++seq, forward: -dz / dist, strafe: dx / dist, yaw: 0, pitch: 0, jump: false, sprint: true });
       await delay(17);
     }
     await waitFor(() => a.state.pickups.get('0')?.active === true && b.state.pickups.get('0')?.active === true, 2500);
     await a.leave(); await b.leave();
-  }, 10000);
+  }, 25000);
   it('creates, joins, synchronizes movement, combat and disconnect', async () => {
     const c1 = new Client(`ws://127.0.0.1:${port}`), c2 = new Client(`ws://127.0.0.1:${port}`); clients.push(c1, c2);
     const a = await c1.create<MatchState>('pcb', { name: 'Alpha', protocol: MOVEMENT_PROTOCOL }); rooms.push(a);
@@ -154,7 +164,7 @@ describe('real Colyseus clients', () => {
     await waitFor(() => a.state.players.size === 2 && b.state.players.size === 2 && a.state.phase === 'playing');
     const startZ = a.state.players.get(a.sessionId)!.z;
     a.send('input', { seq: 1, forward: 1, strafe: 0, yaw: 0, pitch: 0, jump: false, sprint: false });
-    await waitFor(() => a.state.players.get(a.sessionId)!.z < startZ - .2 && b.state.players.get(a.sessionId)!.z < startZ - .2);
+    await waitFor(() => a.state.players.get(a.sessionId)!.z < startZ - .1 && b.state.players.get(a.sessionId)!.z < startZ - .1);
     // Aim at Bravo; authoritative positions and damage must reach both clients.
     a.send('input', { seq: 2, forward: 0, strafe: 0, yaw: 0, pitch: 0, jump: false, sprint: false });
     await delay(100);

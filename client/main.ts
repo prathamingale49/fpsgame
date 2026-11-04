@@ -65,7 +65,7 @@ const debug = document.createElement('div'); debug.id = 'perf-debug'; debug.hidd
 const scalePanel = document.createElement('aside');
 scalePanel.id = 'scale-debug'; scalePanel.hidden = true;
 scalePanel.innerHTML = `<div class="scale-debug-header"><strong>DEV · PLAYER SCALE</strong><button id="scale-close" type="button">×</button></div>
-  <label for="scale-height">PLAYER HEIGHT <output id="scale-value">1.80 mm</output></label>
+  <label for="scale-height">PLAYER HEIGHT <output id="scale-value">${PLAYER.height.toFixed(2)} mm</output></label>
   <input id="scale-height" type="range" min="${DEV_SCALE.min}" max="${DEV_SCALE.max}" step="${DEV_SCALE.step}" value="${PLAYER.height}">
   <div id="scale-metrics"></div>
   <p>Shared by the entire room. Jump apex and movement speed scale with player height. Release the slider to apply.</p>
@@ -89,9 +89,8 @@ function applyPlayerHeight(height: number) {
   playerTuning = tuningForHeight(height);
   scaleSlider.value = height.toFixed(2);
   updateScaleReadout(height);
-  const scale = height / PLAYER.height;
-  gunView.scale.setScalar(.75 * scale);
-  remotes.forEach(entry => entry.mesh.scale.setScalar(.75 * scale));
+  gunView.scale.setScalar(.75 * height / 1.8);
+  remotes.forEach(entry => entry.mesh.scale.setScalar(height / 2.2));
 }
 let showDebug = false, fpsFrames = 0, fpsStart = performance.now(), lastFrameTime = 0, renderCpuMs = 0;
 const frameTimes: number[] = [];
@@ -162,11 +161,11 @@ function makePlayer(index: number): THREE.Group {
   const head = new THREE.Mesh(new THREE.SphereGeometry(.37, 12, 8), pale); head.position.y = 1.83; group.add(head);
   const visor = new THREE.Mesh(new THREE.BoxGeometry(.52, .22, .08), dark); visor.position.set(0, 1.88, -.34); group.add(visor);
   const gun = new THREE.Mesh(new THREE.BoxGeometry(.15, .14, .9), dark); gun.position.set(.32, 1.32, -.52); group.add(gun);
-  group.scale.setScalar(.75 * playerTuning.height / PLAYER.height);
+  group.scale.setScalar(playerTuning.height / 2.2);
   return group;
 }
 const gunView = new THREE.Group(); camera.add(gunView); scene.add(camera);
-gunView.scale.setScalar(.75);
+gunView.scale.setScalar(.75 * PLAYER.height / 1.8);
 const gunBody = new THREE.Mesh(new THREE.BoxGeometry(.18, .22, .75), dark); gunBody.position.set(.43, -.36, -.75); gunView.add(gunBody);
 const gunAccent = new THREE.Mesh(new THREE.BoxGeometry(.19, .07, .28), copper); gunAccent.position.set(.43, -.22, -.77); gunView.add(gunAccent);
 const muzzle = new THREE.Mesh(new THREE.SphereGeometry(.14, 8, 6), new THREE.MeshBasicMaterial({ color: '#f6f5b2' }));

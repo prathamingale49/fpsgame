@@ -81,7 +81,7 @@ In the browser, enter a name and click **Create Room** or **Play Now**. You can 
 
 After starting with `npm run dev:scale` and joining a room, press **F4** to open the slider. Pointer lock releases so you can adjust the height between **0.75 and 2.25 mm** in 0.05 mm steps. Release the slider to apply the change, then click **Close & Resume**. On some laptops you may need **Fn+F4**.
 
-The panel shows the player height, jump apex, sprint speed, and hitbox width in millimeters. Jump height stays approximately **1.63× player height**, matching the original jump in the fixed-step physics simulation. Collision radius, eye height, movement speed, avatar, and weapon size change with it. Compare heights such as **1.00, 1.10, 1.25, and 1.80 mm** on the same map. **F3** displays the currently applied height alongside performance metrics.
+The normal game now uses a **0.90 mm** player height, chosen after testing on the BMS. The panel shows player height, jump apex, sprint speed, and hitbox width in millimeters. Jump height stays approximately **1.63× player height**, preserving the original jump proportions. Collision radius, eye height, movement speed, avatar, and weapon size scale together. F4 is still available as a development-only room-wide override; **F3** displays the active height alongside performance metrics.
 
 The scale is a server-authoritative **room-wide development setting**, not a selectable advantage for individual players. All clients are updated together so player collision and shooting agree. The normal `npm run dev` and production server leave the slider disabled. The flag can also be set explicitly on a non-production server with `PCB_DEV_SCALE=1`; never enable this on a public game server.
 
@@ -190,7 +190,7 @@ To add another board, pass a fourth import argument such as `new-board`, run `np
 | Dependency install fails | Run `npm ci` **inside** `fpsgame` where `package-lock.json` exists. Check your network connection and Node.js version. |
 | Browser cannot connect or says server version differs | Both server and frontend must be started from the **same branch**. Stop old instances, run `npm run dev:scale` again, then hard-refresh the page. |
 | `localhost:5173` does not open | Leave `npm run dev` or `npm run dev:scale` running and check its terminal output for an error or port conflict. |
-| F4 slider does not appear | Use branch `feat/dev-player-scale`, start with `npm run dev:scale`, and **join a room first**. Check `/api/health` for `"devScaleEnabled":true`. |
+| F4 slider does not appear | Start with `npm run dev:scale` and **join a room first**. Check `/api/health` for `"devScaleEnabled":true`. |
 | BMS does not appear | Verify `assets/public/maps/bms.json` and `bms.glb` exist; restart the server and confirm `/api/health` says `"map":"bms"`. |
 | PCB has no artwork | Supply the optional PNG at import time and verify `bms-top.png` exists. |
 | STEP import is slow or fails | Full assemblies can need considerable memory. Verify the file is a real STEP assembly, not just a PCB outline. |

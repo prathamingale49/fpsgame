@@ -4,6 +4,14 @@ import { aimRay, collisionCacheStats, hitscan, initialMotion, JUMP_HEIGHT_RATIO,
 
 const input: Input = { seq: 1, forward: 1, strafe: 0, yaw: 0, pitch: 0, jump: false, sprint: false };
 describe('movement', () => {
+  it('uses the tested 0.90 mm scale in normal rooms without enabling debug mode', () => {
+    expect(PLAYER.height).toBe(.9);
+    expect(PLAYER.radius).toBeCloseTo(.18);
+    expect(PLAYER.eye).toBeCloseTo(.77);
+    expect(PLAYER.walkSpeed).toBeCloseTo(7);
+    expect(PLAYER.sprintSpeed).toBeCloseTo(10);
+    expect(PLAYER.jumpSpeed).toBeCloseTo(tuningForHeight(.9).jumpSpeed);
+  });
   it('scales jump apex, hitbox, speed, and eye position with the development slider', () => {
     const empty = { ...testMap, boxes: [] };
     expect(tuningForHeight(PLAYER.height).jumpSpeed).toBeCloseTo(PLAYER.jumpSpeed, 10);
@@ -52,28 +60,28 @@ describe('movement', () => {
     expect(m.z).toBeGreaterThan(-18);
   });
   it('can jump onto a large component', () => {
-    const map = { ...testMap, boxes: [{ min: [-2, 0, -5] as [number, number, number], max: [2, 2.5, -2] as [number, number, number] }] };
+    const map = { ...testMap, boxes: [{ min: [-2, 0, -5] as [number, number, number], max: [2, 1.25, -2] as [number, number, number] }] };
     let m = initialMotion([0, 0, 0]);
-    for (let i = 0; i < 18; i++) m = stepMotion(m, { ...input, jump: i === 0 }, map);
+    for (let i = 0; i < 36; i++) m = stepMotion(m, { ...input, jump: i === 0 }, map);
     expect(m.z).toBeLessThan(-2);
     for (let i = 0; i < 90; i++) m = stepMotion(m, { ...input, forward: 0 }, map);
-    expect(m.y).toBeCloseTo(2.5, 2); expect(m.grounded).toBe(true);
+    expect(m.y).toBeCloseTo(1.25, 2); expect(m.grounded).toBe(true);
   });
   it('mantles a marked connector while holding jump and remains on top', () => {
-    const map = { ...testMap, boxes: [{ min: [-3, 0, -6] as [number, number, number], max: [3, 8.5, -3] as [number, number, number], climbable: true, kind: 'connector' as const }] };
+    const map = { ...testMap, boxes: [{ min: [-3, 0, -6] as [number, number, number], max: [3, 4.25, -3] as [number, number, number], climbable: true, kind: 'connector' as const }] };
     let m = initialMotion([0, 0, 0]);
     let climbed = false;
     for (let i = 0; i < 100; i++) {
       m = stepMotion(m, { ...input, forward: i < 25 ? 1 : 0, jump: true }, map);
-      if (m.y >= 8.5) climbed = true;
+      if (m.y >= 4.25) climbed = true;
     }
     expect(climbed).toBe(true);
-    expect(m.y).toBeCloseTo(8.5, 3);
+    expect(m.y).toBeCloseTo(4.25, 3);
     expect(m.grounded).toBe(true);
     expect(m.z).toBeLessThan(-3);
     for (let i = 0; i < 50; i++) m = stepMotion(m, { ...input, forward: 0, jump: true }, map);
-    expect(m.y).toBeCloseTo(8.5, 3);
-    const shot = hitscan(aimRay(m.x, m.y, m.z, 0, 0), map, [['opponent', initialMotion([0, 8.5, m.z - 7])]], 'self');
+    expect(m.y).toBeCloseTo(4.25, 3);
+    const shot = hitscan(aimRay(m.x, m.y, m.z, 0, 0), map, [['opponent', initialMotion([0, 4.25, m.z - 7])]], 'self');
     expect(shot.target).toBe('opponent');
   });
   it('keeps unmarked header cover solid for movement and shots', () => {

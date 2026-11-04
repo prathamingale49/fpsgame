@@ -2,25 +2,27 @@ export const TICK = 1 / 60;
 export const MOVEMENT_PROTOCOL = 3;
 export const MATCH_SECONDS = 300;
 export const RESPAWN_SECONDS = 2.5;
-export const PLAYER = { radius: .36, height: 1.8, eye: 1.54, walkSpeed: 14, sprintSpeed: 20, jumpSpeed: 13.5, gravity: 30, mantleSpeed: 32, mantleReach: 7, fallDeathDepth: 18 } as const;
 export type PlayerTuning = { radius: number; height: number; eye: number; walkSpeed: number; sprintSpeed: number; jumpSpeed: number; gravity: number; mantleSpeed: number; mantleReach: number; fallDeathDepth: number };
 export const DEV_SCALE = { min: .75, max: 2.25, step: .05 } as const;
+// Preserve the feel of the original 1.8 mm character as the reference for every scale.
+const REFERENCE_PLAYER = { radius: .36, height: 1.8, eye: 1.54, walkSpeed: 14, sprintSpeed: 20, jumpSpeed: 13.5, gravity: 30, mantleSpeed: 32, mantleReach: 7, fallDeathDepth: 18 } as const;
+export const DEFAULT_PLAYER_HEIGHT = .9;
 // Jump apex in the fixed-step integrator, accounting for velocity being decremented before movement.
-// The original 1.8 mm jump is preserved and every size reaches the same fraction of its own height.
-export const JUMP_HEIGHT_RATIO = (PLAYER.jumpSpeed - PLAYER.gravity * TICK / 2) ** 2 / (2 * PLAYER.gravity * PLAYER.height);
+export const JUMP_HEIGHT_RATIO = (REFERENCE_PLAYER.jumpSpeed - REFERENCE_PLAYER.gravity * TICK / 2) ** 2 / (2 * REFERENCE_PLAYER.gravity * REFERENCE_PLAYER.height);
 export function validDevHeight(value: unknown): number | null {
   if (typeof value !== 'number' || !Number.isFinite(value) || value < DEV_SCALE.min || value > DEV_SCALE.max) return null;
   return Number((Math.round(value / DEV_SCALE.step) * DEV_SCALE.step).toFixed(2));
 }
 export function tuningForHeight(height: number): PlayerTuning {
-  const scale = height / PLAYER.height;
+  const scale = height / REFERENCE_PLAYER.height;
   return {
-    radius: PLAYER.radius * scale, height, eye: PLAYER.eye * scale,
-    walkSpeed: PLAYER.walkSpeed * scale, sprintSpeed: PLAYER.sprintSpeed * scale,
-    jumpSpeed: Math.sqrt(2 * PLAYER.gravity * JUMP_HEIGHT_RATIO * height) + PLAYER.gravity * TICK / 2, gravity: PLAYER.gravity,
-    mantleSpeed: PLAYER.mantleSpeed * scale, mantleReach: PLAYER.mantleReach * scale, fallDeathDepth: PLAYER.fallDeathDepth,
+    radius: REFERENCE_PLAYER.radius * scale, height, eye: REFERENCE_PLAYER.eye * scale,
+    walkSpeed: REFERENCE_PLAYER.walkSpeed * scale, sprintSpeed: REFERENCE_PLAYER.sprintSpeed * scale,
+    jumpSpeed: Math.sqrt(2 * REFERENCE_PLAYER.gravity * JUMP_HEIGHT_RATIO * height) + REFERENCE_PLAYER.gravity * TICK / 2, gravity: REFERENCE_PLAYER.gravity,
+    mantleSpeed: REFERENCE_PLAYER.mantleSpeed * scale, mantleReach: REFERENCE_PLAYER.mantleReach * scale, fallDeathDepth: REFERENCE_PLAYER.fallDeathDepth,
   };
 }
+export const PLAYER = tuningForHeight(DEFAULT_PLAYER_HEIGHT);
 export const PLAYER_RADIUS = PLAYER.radius;
 export const PLAYER_HEIGHT = PLAYER.height;
 export const EYE_HEIGHT = PLAYER.eye;
