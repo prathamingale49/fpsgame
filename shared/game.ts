@@ -30,7 +30,9 @@ export const WEAPON = { name: 'Solder Blaster', damage: 25, magazine: 30, reserv
 
 export type Box = { min: [number, number, number]; max: [number, number, number]; name?: string; climbable?: boolean; kind?: 'header' | 'connector' };
 export type Spawn = [number, number, number];
-export type MapData = { id: string; title: string; width: number; depth: number; ground: number; boxes: Box[]; spawns: Spawn[]; model?: string; texture?: string; components?: { ref: string; x: number; z: number; rotation: number; layer: string }[] };
+export type BoardSide = 'front' | 'back';
+export type BoardBack = { boxes: Box[]; thickness: number; enabled: boolean };
+export type MapData = { id: string; title: string; width: number; depth: number; ground: number; boxes: Box[]; spawns: Spawn[]; back?: BoardBack; model?: string; texture?: string; components?: { ref: string; x: number; z: number; rotation: number; layer: string }[] };
 export type Input = { seq: number; forward: number; strafe: number; yaw: number; pitch: number; jump: boolean; sprint: boolean };
 export type Motion = { x: number; y: number; z: number; vy: number; grounded: boolean; jumpHeld: boolean; mantleTarget: number };
 
