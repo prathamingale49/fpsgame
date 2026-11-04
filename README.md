@@ -13,7 +13,7 @@ npm run dev
 
 Open `http://localhost:5173`. Use **Create Room** and share the room link, or use **Play Now** to join an open room. Each room holds up to eight players. A match begins when two join. For internet play, run the server on a publicly reachable host and share its HTTPS URL; the WebSocket endpoint uses the same host and port in production.
 
-Controls: WASD move, mouse aim, left click fire, Space jump, Shift sprint, R reload, Tab scoreboard, F3 performance overlay, Esc unlock pointer. The Solder Blaster has a 30-round magazine and collects reserve ammunition from solder spools around the map. Graphics quality, mouse sensitivity, and sound volume are available under Settings. Matches last five minutes, with unlimited respawns. When the timer ends, the highest kill count wins; ties favor fewer deaths.
+Controls: WASD move, mouse aim, left click fire, Space jump or hold Space while moving into a connector ledge to climb, Shift sprint, R reload, Tab scoreboard, F3 performance overlay, Esc unlock pointer. Players can fall from PCB edges; environmental deaths count as deaths without awarding a kill. The Solder Blaster has a 30-round magazine and collects reserve ammunition from solder spools around the map. Graphics quality, mouse sensitivity, and sound volume are available under Settings. Matches last five minutes, with unlimited respawns. When the timer ends, the highest kill count wins; ties favor fewer deaths.
 
 ## Import the BMS assembly
 
@@ -25,11 +25,11 @@ npm run build
 npm start
 ```
 
-The importer uses Open Cascade via `occt-import-js` to tessellate STEP solids, preserves their real millimeter coordinates, rotates STEP Z-up to Three.js Y-up, centers the board, combines solids by material into a GLB, and writes `assets/public/maps/bms.json`. The map contains simplified collision boxes for top-side components at least 0.8 mm across and 0.8 mm high, distributed safe spawn points in a connected open area, and component designators matched to Altium CSV placements. The model and map are used automatically on the next server start. Other board designs can use the same pipeline and JSON/GLB contract. The first import can take several minutes and needs ample RAM.
+The importer uses Open Cascade via `occt-import-js` to tessellate STEP solids, preserves their real millimeter coordinates, rotates STEP Z-up to Three.js Y-up, centers the board, combines solids by material into a GLB, and writes `assets/public/maps/bms.json`. The map contains simplified collision boxes for top-side components at least 0.8 mm across and 0.8 mm high, plus long pin-header assemblies detected within oversized CAD nodes, distributed safe spawn points in a connected open area, and component designators matched to Altium CSV placements. The model and map are used automatically on the next server start. Other board designs can use the same pipeline and JSON/GLB contract. The first import can take several minutes and needs ample RAM.
 
 `bmstop.png` is recolored from Altium's layer colors to green solder mask, copper and light silkscreen without moving pixels, then mapped onto the board at its real aspect ratio. The original image is kept alongside it locally. The board model retains STEP component placement and approximate material categories. Bottom-side components are rendered but excluded from top-side collisions. This is a game collision approximation; run `npm run audit:map` to check generated boxes, CSV alignment and spawns when changing board designs.
 
-The STEP assembly also includes a BeagleBone Black model (`Q14`) that spans roughly 90 × 55 mm over the BMS. It is rendered translucent and omitted from collisions so the actual BMS surface remains visible and navigable; its CAD position is preserved.
+The STEP assembly also includes a BeagleBone Black model (`Q14`) that spans roughly 90 × 55 mm over the BMS. Most of it is rendered translucent and omitted from collisions so the actual BMS surface remains navigable. The importer extracts its two long, narrow pin-header rows as visible solid cover while keeping the space between them open. Tall `J` connectors are marked climbable; header cover is not.
 
 ## Verification
 
@@ -38,9 +38,13 @@ npm run build
 npm test
 npm run test:browser
 npm run test:movement
+npm run audit:map
+npm run test:soak
 ```
 
-`npm test` checks fixed-step movement, jumps, boundaries, component shot blocking, ordered and out-of-order input delivery, server-controlled ammunition and pickups, and two real Colyseus SDK clients joining, moving, shooting, taking damage, dying, respawning, disconnecting, and completing a match. `test:browser` checks room joining, WebGL rendering, reconnection, pointer lock, basic movement, graphics settings, and F3 telemetry. `test:movement` uses two independent browser clients and the real server to hold W through multiple authoritative snapshots, check for backward corrections and stopping after release, and repeat at 0, 50, 100, and 200 ms simulated latency with a reduced render rate. It also runs on the BMS when the private map assets are present. Browser tests require Chrome at `C:/Program Files/Google/Chrome/Application/chrome.exe` and write diagnostics to `artifacts/`. Before/after frame and collision measurements are in [docs/performance.md](docs/performance.md).
+`npm test` checks fixed-step movement, connector mantling, edge falls, shot blocking, ordered and out-of-order input delivery, ammunition and pickups, and two real Colyseus clients including environmental death and respawn. `test:browser` checks room joining, WebGL rendering, reconnection, pointer lock, movement, graphics controls, and F3. `test:movement` uses two browser clients and the real server across latency, jitter, and low render rates. `test:soak` runs two browser clients for three minutes on the imported BMS when available, with continuous direction changes, sprinting, and jumping, and compares initial and final browser and server metrics. Browser tests require Chrome at `C:/Program Files/Google/Chrome/Application/chrome.exe` and write diagnostics to `artifacts/`. Measurements and caveats are in [docs/performance.md](docs/performance.md).
+
+The soak defaults to SwiftShader for repeatability. On Windows with a working GPU, use `$env:SOAK_RENDERER='hardware'` before `npm run test:soak` to measure the Direct3D 11 ANGLE path.
 
 ## Hosting
 

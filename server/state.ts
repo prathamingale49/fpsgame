@@ -3,7 +3,7 @@ import { schema, t, type SchemaType } from '@colyseus/schema';
 export const PlayerState = schema({
   name: t.string().default('Engineer'),
   x: t.float32().default(0), y: t.float32().default(0), z: t.float32().default(0),
-  vy: t.float32().default(0), grounded: t.boolean().default(true),
+  vy: t.float32().default(0), grounded: t.boolean().default(true), jumpHeld: t.boolean().default(false), mantleTarget: t.float32().default(0),
   yaw: t.float32().default(0), pitch: t.float32().default(0),
   hp: t.uint8().default(100), ammo: t.uint8().default(30), reserve: t.uint16().default(60),
   kills: t.uint16().default(0), deaths: t.uint16().default(0),

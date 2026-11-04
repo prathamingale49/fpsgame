@@ -1,7 +1,7 @@
 import * as THREE from 'three';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 import { Client, type Room } from '@colyseus/sdk';
-import { EYE_HEIGHT, initialMotion, MOVEMENT_PROTOCOL, stepMotion, testMap, TICK, WEAPON, type Input, type MapData, type Motion } from '../shared/game';
+import { collisionCacheStats, EYE_HEIGHT, initialMotion, MOVEMENT_PROTOCOL, stepMotion, testMap, TICK, WEAPON, type Input, type MapData, type Motion } from '../shared/game';
 import type { MatchState, PlayerState } from '../server/state';
 import './style.css';
 
@@ -27,6 +27,8 @@ const playerMaterials = ['#dd704e', '#82cddd', '#c9dc6b', '#c999e6', '#f3c669', 
 let map: MapData = testMap;
 let room: Room<MatchState> | null = null;
 let local: Motion = initialMotion(testMap.spawns[0]);
+let lastSentInput: Input | null = null;
+let nextInputAt = performance.now();
 let yaw = 0, pitch = 0, seq = 0, mouseDown = false, lastShot = 0;
 let sensitivity = Number(localStorage.getItem('pcb-sensitivity')) || .0022;
 let volume = Number(localStorage.getItem('pcb-volume') ?? '.25');
@@ -34,12 +36,17 @@ let audioContext: AudioContext | null = null;
 let pending: Input[] = [];
 let snapshot: MatchState | null = null;
 const movementTrace = new URLSearchParams(location.search).has('movementTrace');
+const soakTest = new URLSearchParams(location.search).has('soakTest');
 type MovementTrace = { event: string; time: number; seq: number; ack: number; pending: number; predicted: [number, number, number]; authoritative: [number, number, number]; correction: number; yaw: number; forward: number };
 const movementEvents: MovementTrace[] = [];
 const movementSnapshots: { time: number; players: { id: string; ack: number; position: [number, number, number] }[] }[] = [];
+let testMove: { remaining: number; yaw: number } | null = null;
+let soakMode = false, soakTick = 0;
+if (soakTest) (window as unknown as { __pcbStartSoak: () => void }).__pcbStartSoak = () => { soakMode = true; soakTick = 0; };
 if (movementTrace) {
   (window as Window & { __pcbMovementTrace?: MovementTrace[] }).__pcbMovementTrace = movementEvents;
   (window as Window & { __pcbMovementSnapshots?: typeof movementSnapshots }).__pcbMovementSnapshots = movementSnapshots;
+  (window as unknown as { __pcbStartMovementTest: (ticks: number, testYaw: number) => void }).__pcbStartMovementTest = (ticks, testYaw) => { testMove = { remaining: ticks, yaw: testYaw }; };
 }
 function recordMovement(event: string, ack: number, correctionValue = 0, forward = 0) {
   if (!movementTrace) return;
@@ -54,6 +61,19 @@ const spoolMeshes = new Map<string, THREE.Group>();
 let correction = 0, collisionChecks = 0, ping = 0;
 const debug = document.createElement('div'); debug.id = 'perf-debug'; debug.hidden = true; el('app').append(debug);
 let showDebug = false, fpsFrames = 0, fpsStart = performance.now(), lastFrameTime = 0, renderCpuMs = 0;
+const frameTimes: number[] = [];
+const playCorrections: number[] = [];
+const gl = renderer.getContext(), debugRenderer = gl.getExtension('WEBGL_debug_renderer_info');
+const gpu = debugRenderer ? String(gl.getParameter(debugRenderer.UNMASKED_RENDERER_WEBGL)) : String(gl.getParameter(gl.RENDERER));
+let maxPending = 0, maxCorrection = 0;
+(window as unknown as { __pcbPerf: () => unknown }).__pcbPerf = () => ({
+  frameTimes: [...frameTimes], playCorrections: [...playCorrections], pending: pending.length, maxPending, correction, maxCorrection,
+  renderer: { geometries: renderer.info.memory.geometries, textures: renderer.info.memory.textures, calls: renderer.info.render.calls, triangles: renderer.info.render.triangles },
+  gpu,
+  cache: collisionCacheStats(map), heapMB: ((performance as Performance & { memory?: { usedJSHeapSize: number } }).memory?.usedJSHeapSize ?? 0) / 1048576,
+  position: [local.x, local.y, local.z], authoritative: room?.state.players.get(room.sessionId) ? [room.state.players.get(room.sessionId)!.x, room.state.players.get(room.sessionId)!.y, room.state.players.get(room.sessionId)!.z] : null,
+});
+(window as unknown as { __pcbResetPerfWindow: () => void }).__pcbResetPerfWindow = () => { frameTimes.length = 0; playCorrections.length = 0; };
 let wasReloading = false;
 let playerColorIndex = 0;
 
@@ -100,9 +120,6 @@ function buildMap(data: MapData) {
       world.add(gltf.scene); canvas.dataset.modelLoaded = 'true';
     }, undefined, error => { console.error('PCB model load failed', error); canvas.dataset.modelLoaded = 'error'; map.boxes.forEach(box => world.add(boxMesh(box, dark))); });
   }
-  // Under-board staging gives a sense of miniature scale without blocking play.
-  const platform = new THREE.Mesh(new THREE.BoxGeometry(map.width + 35, 2, map.depth + 35), new THREE.MeshStandardMaterial({ color: '#172b24', roughness: 1 }));
-  platform.position.y = map.ground - 2.7; world.add(platform);
 }
 buildMap(map);
 
@@ -195,10 +212,14 @@ function syncState(state: MatchState) {
     if (me.reloading && !wasReloading) sound(570, .22, 'triangle');
     wasReloading = me.reloading;
     const before = local;
-    const authoritative: Motion = { x: me.x, y: me.y, z: me.z, vy: me.vy, grounded: me.grounded };
+    const authoritative: Motion = { x: me.x, y: me.y, z: me.z, vy: me.vy, grounded: me.grounded, jumpHeld: me.jumpHeld, mantleTarget: me.mantleTarget };
     pending = pending.filter(input => input.seq > me.ack);
     local = pending.reduce((motion, input) => stepMotion(motion, input, map), authoritative);
     correction = Math.hypot(local.x - before.x, local.y - before.y, local.z - before.z);
+    maxCorrection = Math.max(maxCorrection, correction);
+    if (me.alive && before.y >= map.ground - 1 && Math.abs(before.y - me.y) < 10) {
+      playCorrections.push(correction); if (playCorrections.length > 2400) playCorrections.splice(0, 1200);
+    }
     recordMovement('snapshot', me.ack, correction);
     if (!me.alive) { local = authoritative; pending = []; }
   }
@@ -233,7 +254,7 @@ async function connect(mode: 'play' | 'create' | 'join' | 'reconnect') {
     const options = { name, protocol: MOVEMENT_PROTOCOL };
     room = mode === 'reconnect' && token ? await client.reconnect<MatchState>(token) : mode === 'join' ? await client.joinById<MatchState>(code, options) : mode === 'create' ? await client.create<MatchState>('pcb', options) : await client.joinOrCreate<MatchState>('pcb', options);
     const me = room.state?.players?.get(room.sessionId);
-    pending = []; seq = me?.ack ?? 0; yaw = me?.yaw ?? 0; pitch = me?.pitch ?? 0;
+    pending = []; lastSentInput = null; nextInputAt = performance.now(); seq = me?.ack ?? 0; yaw = me?.yaw ?? 0; pitch = me?.pitch ?? 0;
     const response = await fetch('/api/map');
     if (response.ok) buildMap(await response.json() as MapData);
     el('map-name').textContent = map.title.toUpperCase();
@@ -245,8 +266,8 @@ async function connect(mode: 'play' | 'create' | 'join' | 'reconnect') {
     room.onMessage('shot', (msg: { shooter: string; from: number[]; to: number[]; hit?: string }) => { addTracer(msg.from, msg.to); if (msg.shooter === room?.sessionId && msg.hit) flashHit(); });
     room.onMessage('damage', (msg: { target: string }) => { if (msg.target === room?.sessionId) flashDamage(); });
     room.onMessage('pickup', (msg: { player: string; amount: number }) => { if (msg.player === room?.sessionId) { showFeed(`+${msg.amount} solder rounds`); sound(710, .16, 'sine'); } });
-    room.onDrop(() => { recordMovement('drop', me?.ack ?? 0); mouseDown = false; pending = []; showFeed('Connection lost · reconnecting'); });
-    room.onReconnect(() => { const ack = room!.state.players.get(room!.sessionId)?.ack ?? seq; recordMovement('reconnect', ack); pending = []; seq = ack; sessionStorage.setItem('pcb-reconnection-token', room!.reconnectionToken); syncState(room!.state); showFeed('Connection restored'); });
+    room.onDrop(() => { recordMovement('drop', me?.ack ?? 0); mouseDown = false; pending = []; lastSentInput = null; showFeed('Connection lost · reconnecting'); });
+    room.onReconnect(() => { const ack = room!.state.players.get(room!.sessionId)?.ack ?? seq; recordMovement('reconnect', ack); pending = []; lastSentInput = null; seq = ack; sessionStorage.setItem('pcb-reconnection-token', room!.reconnectionToken); syncState(room!.state); showFeed('Connection restored'); });
     room.onLeave(() => { sessionStorage.removeItem('pcb-reconnection-token'); room = null; el('menu').classList.remove('hidden'); el('hud').classList.add('hidden'); document.exitPointerLock(); showFeed('Disconnected from room'); });
     sessionStorage.setItem('pcb-reconnection-token', room.reconnectionToken);
     if (room.state?.players) syncState(room.state);
@@ -282,11 +303,28 @@ setInterval(() => {
   if (!room || !snapshot || room.reconnection.isReconnecting) return;
   const me = snapshot.players.get(room.sessionId);
   if (!me?.alive) return;
+  const sampledAt = performance.now();
+  if (sampledAt < nextInputAt) return;
+  nextInputAt = Math.max(nextInputAt + TICK * 1000, sampledAt);
   const locked = document.pointerLockElement === canvas;
-  const input: Input = { seq: ++seq, forward: locked ? Number(keys.has('KeyW')) - Number(keys.has('KeyS')) : 0, strafe: locked ? Number(keys.has('KeyD')) - Number(keys.has('KeyA')) : 0, yaw, pitch, jump: locked && keys.has('Space'), sprint: locked && (keys.has('ShiftLeft') || keys.has('ShiftRight')) };
+  const testing = testMove && testMove.remaining > 0;
+  const soakPhase = Math.floor(soakTick / 72) % 4;
+  const input: Input = { seq: seq + 1,
+    forward: testing ? 1 : soakMode ? [1, 0, -1, 0][soakPhase] : locked ? Number(keys.has('KeyW')) - Number(keys.has('KeyS')) : 0,
+    strafe: testing ? 0 : soakMode ? [0, 1, 0, -1][soakPhase] : locked ? Number(keys.has('KeyD')) - Number(keys.has('KeyA')) : 0,
+    yaw: testing ? testMove!.yaw : yaw, pitch, jump: soakMode ? soakTick % 72 < 10 : !testing && locked && keys.has('Space'),
+    sprint: soakMode || (!testing && locked && (keys.has('ShiftLeft') || keys.has('ShiftRight'))) };
+  if (soakMode) soakTick++;
+  if (testing && --testMove!.remaining === 0) testMove = null;
+  const repeatedIdle = local.grounded && local.mantleTarget === 0 && input.forward === 0 && input.strafe === 0 && !input.jump && !input.sprint && lastSentInput
+    && lastSentInput.forward === 0 && lastSentInput.strafe === 0 && !lastSentInput.jump && !lastSentInput.sprint
+    && lastSentInput.yaw === input.yaw && lastSentInput.pitch === input.pitch;
+  if (repeatedIdle) return;
+  seq++; lastSentInput = input;
   const stats = { collisionChecks: 0 };
   local = stepMotion(local, input, map, TICK, stats); collisionChecks += stats.collisionChecks;
   pending.push(input); if (pending.length > 2048) pending.shift();
+  maxPending = Math.max(maxPending, pending.length);
   room.send('input', input);
   recordMovement('input', me.ack, 0, input.forward);
 }, 1000 / 60);
@@ -294,6 +332,7 @@ function frame(now: number) {
   requestAnimationFrame(frame);
   const elapsedMs = now - previous, dt = Math.min(elapsedMs / 1000, .25); previous = now;
   lastFrameTime = elapsedMs; fpsFrames++;
+  frameTimes.push(elapsedMs); if (frameTimes.length > 2400) frameTimes.splice(0, 1200);
   if (room && snapshot) {
     const me = snapshot.players.get(room.sessionId);
     if (mouseDown && document.pointerLockElement === canvas && me?.alive && !me.reloading && me.ammo > 0 && now - lastShot >= WEAPON.fireInterval * 1000) {
@@ -317,7 +356,7 @@ function frame(now: number) {
   if (canvas.width !== Math.round(width * renderer.getPixelRatio()) || canvas.height !== Math.round(height * renderer.getPixelRatio())) { renderer.setSize(width, height, false); camera.aspect = width / height; camera.updateProjectionMatrix(); }
   const renderStart = performance.now(); renderer.render(scene, camera); renderCpuMs = performance.now() - renderStart;
   if (showDebug && now - fpsStart >= 500) {
-    debug.textContent = `FPS ${(fpsFrames * 1000 / (now - fpsStart)).toFixed(0)}\nFrame ${lastFrameTime.toFixed(1)} ms\nRender CPU ${renderCpuMs.toFixed(1)} ms\nPing ${ping.toFixed(0)} ms\nCorrection ${correction.toFixed(3)} mm\nCollision checks ${collisionChecks}\nPending inputs ${pending.length}\nDraw calls ${renderer.info.render.calls}\nTriangles ${renderer.info.render.triangles}`;
+    debug.textContent = `FPS ${(fpsFrames * 1000 / (now - fpsStart)).toFixed(0)}\nFrame ${lastFrameTime.toFixed(1)} ms\nRender CPU ${renderCpuMs.toFixed(1)} ms\nPing ${ping.toFixed(0)} ms\nCorrection ${correction.toFixed(3)} mm\nCollision checks ${collisionChecks}\nPending inputs ${pending.length}\nCache queries ${collisionCacheStats(map).queries}\nGeometries ${renderer.info.memory.geometries} · Textures ${renderer.info.memory.textures}\nDraw calls ${renderer.info.render.calls}\nTriangles ${renderer.info.render.triangles}`;
     fpsFrames = 0; fpsStart = now; collisionChecks = 0;
   }
 }

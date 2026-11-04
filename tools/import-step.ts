@@ -44,12 +44,36 @@ console.log(`Board ${width.toFixed(2)} × ${depth.toFixed(2)} mm, STEP bounds ${
 function nodeMeshes(node: CadNode): number[] { return [...(node.meshes ?? []), ...(node.children ?? []).flatMap(nodeMeshes)]; }
 const assembly = cad.root.children?.find(node => nodeMeshes(node).includes(boardIndex)) ?? cad.root;
 const nodes = assembly.children?.length ? assembly.children : [assembly];
+// Some STEP exporters nest complete pin-header rows inside a huge component assembly.
+// Find long, narrow housings and their matching tall pin strip before rejecting that assembly.
+const headerRows: { node: CadNode; bounds: Bounds; ids: number[] }[] = [];
+for (const node of nodes) {
+  const ids = nodeMeshes(node).filter(id => id !== boardIndex);
+  if (!ids.length) continue;
+  const whole = ids.map(id => meshBounds[id]).reduce(union);
+  if ((whole.max[0] - whole.min[0]) * (whole.max[1] - whole.min[1]) <= width * depth * .25) continue;
+  for (const bodyId of ids) {
+    const body = meshBounds[bodyId];
+    const bw = body.max[0] - body.min[0], bd = body.max[1] - body.min[1];
+    if (!/body$/i.test(cad.meshes[bodyId].name) || Math.max(bw, bd) < 12 || Math.min(bw, bd) > 8 || body.max[2] - boardTop < 1) continue;
+    const stripId = ids.find(id => {
+      if (id === bodyId) return false;
+      const b = meshBounds[id], w = b.max[0] - b.min[0], d = b.max[1] - b.min[1];
+      return Math.max(w, d) >= Math.max(bw, bd) * .75 && b.max[2] - boardTop >= 4
+        && b.min[0] >= body.min[0] - 1 && b.max[0] <= body.max[0] + 1
+        && b.min[1] >= body.min[1] - 1 && b.max[1] <= body.max[1] + 1;
+    });
+    if (stripId !== undefined) headerRows.push({ node, bounds: union(body, meshBounds[stripId]), ids: [bodyId, stripId] });
+  }
+}
+const headerIds = new Set(headerRows.flatMap(row => row.ids));
+console.log(`Extracted ${headerRows.length} long pin-header rows from oversized assemblies`);
 const ghostIds = new Set<number>();
 for (const node of nodes) {
   if (nodeMeshes(node).includes(boardIndex)) continue;
   const ids = nodeMeshes(node); if (!ids.length) continue;
   const b = ids.map(id => meshBounds[id]).reduce(union);
-  if ((b.max[0] - b.min[0]) * (b.max[1] - b.min[1]) > width * depth * .25) ids.forEach(id => ghostIds.add(id));
+  if ((b.max[0] - b.min[0]) * (b.max[1] - b.min[1]) > width * depth * .25) ids.filter(id => !headerIds.has(id)).forEach(id => ghostIds.add(id));
 }
 console.log(`Ghosted ${ghostIds.size} solids from oversized mechanical envelopes`);
 const palette = [0x335c2d, 0x161b1a, 0xf0ecdf, 0x752720, 0xc6a04a, 0x666f6a, 0x2d3734, 0x5e7865];
@@ -109,8 +133,14 @@ for (const node of nodes) {
   const b = ids.map(id => meshBounds[id]).reduce(union);
   const height = b.max[2] - boardTop, w = b.max[0] - b.min[0], d = b.max[1] - b.min[1];
   if (height < .8 || w < .8 || d < .8 || w * d > width * depth * .25) continue;
-  boxes.push({ min: [b.min[0] - cx, 0, -(b.max[1] - cy)], max: [b.max[0] - cx, height, -(b.min[1] - cy)], name: node.name });
+  const connector = /^J\d+$/i.test(node.name) && height >= 3 && height <= 12 && Math.min(w, d) >= 4;
+  boxes.push({ min: [b.min[0] - cx, 0, -(b.max[1] - cy)], max: [b.max[0] - cx, height, -(b.min[1] - cy)], name: node.name,
+    ...(connector ? { kind: 'connector' as const, climbable: true } : {}) });
 }
+headerRows.forEach((row, index) => {
+  const b = row.bounds;
+  boxes.push({ min: [b.min[0] - cx, 0, -(b.max[1] - cy)], max: [b.max[0] - cx, b.max[2] - boardTop, -(b.min[1] - cy)], name: `${row.node.name}:header-${index + 1}`, kind: 'header' });
+});
 const spawns: Spawn[] = [];
 const grid = new Map<string, Spawn>();
 const key = (x: number, z: number) => `${x},${z}`;

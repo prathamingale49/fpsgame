@@ -3,11 +3,13 @@ import { spawn } from 'node:child_process';
 import { setTimeout as delay } from 'node:timers/promises';
 import fs from 'node:fs';
 import path from 'node:path';
+import { initialMotion, MOVEMENT_PROTOCOL, stepMotion, type MapData } from '../shared/game.js';
 
 const map = process.env.MOVE_MAP || 'test';
 const latency = Number(process.env.MOVE_LATENCY || 0);
 const frameMs = Number(process.env.MOVE_FRAME_MS || 0);
 const holdMs = Number(process.env.MOVE_HOLD_MS || 1600);
+const moveTicks = Math.ceil(holdMs / 1000 * 60);
 const port = 26681, base = `http://127.0.0.1:${port}`;
 const server = spawn(process.execPath, ['dist-server/main.js'], { cwd: process.cwd(), env: { ...process.env, PORT: String(port), PCB_TEST_MAP: map === 'test' ? '1' : '0', PCB_MOVEMENT_TRACE: process.env.MOVE_SERVER_TRACE ?? '1' }, stdio: 'pipe' });
 const serverLogs: string[] = [];
@@ -17,7 +19,13 @@ let browser: Awaited<ReturnType<typeof chromium.launch>> | undefined;
 try {
   for (let i = 0; i < 100; i++) { try { if ((await fetch(`${base}/api/health`)).ok) break; } catch { /* starting */ } await delay(100); }
   const health = await (await fetch(`${base}/api/health`)).json() as { map: string; movementProtocol?: number };
-  if (health.map !== map || health.movementProtocol !== 2) throw new Error(`Wrong server build or map: ${JSON.stringify(health)}`);
+  if (health.map !== map || health.movementProtocol !== MOVEMENT_PROTOCOL) throw new Error(`Wrong server build or map: ${JSON.stringify(health)}`);
+  const mapData = await (await fetch(`${base}/api/map`)).json() as MapData;
+  const yaw = [0, Math.PI / 2, Math.PI, Math.PI * 1.5].map(angle => {
+    let motion = initialMotion(mapData.spawns[0]);
+    for (let i = 0; i < 96; i++) motion = stepMotion(motion, { seq: i + 1, forward: 1, strafe: 0, yaw: angle, pitch: 0, jump: false, sprint: false }, mapData);
+    return { angle, distance: Math.hypot(motion.x - mapData.spawns[0][0], motion.z - mapData.spawns[0][2]), safe: motion.y >= mapData.ground - 1 };
+  }).filter(route => route.safe).sort((a, b) => b.distance - a.distance)[0]?.angle ?? 0;
   browser = await chromium.launch({ headless: true, executablePath: 'C:/Program Files/Google/Chrome/Application/chrome.exe', args: ['--enable-webgl', '--use-gl=angle', '--use-angle=swiftshader', '--enable-unsafe-swiftshader'] });
   const aContext = await browser.newContext({ viewport: { width: 640, height: 400 } });
   const bContext = await browser.newContext({ viewport: { width: 640, height: 400 } });
@@ -55,11 +63,13 @@ try {
   await Promise.all([a.locator('#game[data-model-loaded="true"]').waitFor({ timeout: 60000 }), b.locator('#game[data-model-loaded="true"]').waitFor({ timeout: 60000 })]);
   if (await a.evaluate(() => document.pointerLockElement?.id !== 'game')) await a.locator('#pause').click();
   if (await a.evaluate(() => document.pointerLockElement?.id !== 'game')) throw new Error('Pointer lock missing');
-  const yaw = map === 'bms' ? Math.PI * 1.5 : 0;
-  if (yaw) await a.evaluate(value => { const event = new MouseEvent('mousemove'); Object.defineProperty(event, 'movementX', { value: -value / .0022 }); document.dispatchEvent(event); }, yaw);
   await delay(300);
   const before = await a.evaluate(() => (window as Window & { __pcbMovementTrace?: { predicted: number[] }[] }).__pcbMovementTrace?.at(-1)?.predicted);
-  await a.keyboard.down('KeyW'); await delay(holdMs); await a.keyboard.up('KeyW');
+  await a.evaluate(({ ticks, angle }) => (window as unknown as { __pcbStartMovementTest: (ticks: number, yaw: number) => void }).__pcbStartMovementTest(ticks, angle), { ticks: moveTicks, angle: yaw });
+  await a.waitForFunction((ticks: number) => {
+    const trace = (window as Window & { __pcbMovementTrace?: { event: string; forward: number }[] }).__pcbMovementTrace ?? [];
+    return trace.filter(event => event.event === 'input' && event.forward === 1).length >= ticks && trace.at(-1)?.forward === 0;
+  }, moveTicks, { timeout: 120000 });
   await delay(900);
   try { await a.waitForFunction(() => ((window as Window & { __pcbMovementTrace?: { pending: number }[] }).__pcbMovementTrace?.at(-1)?.pending ?? Infinity) < 35, undefined, { timeout: 10000 }); }
   catch { /* preserve the trace for diagnosis and fail on the final assertions */ }
