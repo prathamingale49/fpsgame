@@ -6,6 +6,9 @@ import path from 'node:path';
 
 const port = 26674, base = `http://127.0.0.1:${port}`;
 const server = spawn(process.execPath, ['dist-server/main.js'], { cwd: process.cwd(), env: { ...process.env, PORT: String(port) }, stdio: 'pipe' });
+const serverLogs: string[] = [];
+server.stdout?.on('data', chunk => serverLogs.push(String(chunk)));
+server.stderr?.on('data', chunk => serverLogs.push(String(chunk)));
 let browser: Awaited<ReturnType<typeof chromium.launch>> | undefined;
 try {
   for (let i = 0; i < 60; i++) {
@@ -21,16 +24,28 @@ try {
   for (const page of [a, b]) { page.on('pageerror', error => errors.push(error.message)); page.on('console', message => { if (message.type() === 'error') errors.push(message.text()); }); }
   await Promise.all([a.goto(base), b.goto(base)]);
   await a.locator('#name').fill('Browser A'); await a.locator('#create').click();
-  await a.locator('#hud:not(.hidden)').waitFor();
+  try { await a.locator('#hud:not(.hidden)').waitFor({ timeout: 8000 }); }
+  catch { throw new Error(`Initial join failed: ${await a.locator('#error').textContent()} browser=${errors.join(' | ')} server=${serverLogs.join(' | ')}`); }
   const code = (await a.locator('#room-label').textContent())?.match(/ROOM ([A-Z0-9]+)/)?.[1];
   if (!code) throw new Error('Room code missing');
   await b.locator('#name').fill('Browser B'); await b.locator('#code').fill(code); await b.locator('#join').click();
   await Promise.all([a.locator('#player-count').getByText('2 / 8 PLAYERS').waitFor(), b.locator('#player-count').getByText('2 / 8 PLAYERS').waitFor()]);
+  await Promise.all([a.locator('#game[data-model-loaded="true"]').waitFor({ timeout: 30000 }), b.locator('#game[data-model-loaded="true"]').waitFor({ timeout: 30000 })]);
+  await delay(500);
   await a.keyboard.down('Tab'); await a.locator('#scores').getByText('Browser B').waitFor(); await a.keyboard.up('Tab');
-  await a.locator('#game').click(); await delay(200);
+  const storedToken = await a.evaluate(() => sessionStorage.getItem('pcb-reconnection-token'));
+  await a.reload();
+  try { await a.locator('#hud:not(.hidden)').waitFor({ timeout: 8000 }); }
+  catch { throw new Error(`Reload reconnection failed: token=${Boolean(storedToken)} error=${await a.locator('#error').textContent()} browserErrors=${errors.join(' | ')}`); }
+  await a.locator('#game[data-model-loaded="true"]').waitFor({ timeout: 30000 });
+  await a.locator('#pause').click(); await delay(200);
   const pointerLocked = await a.evaluate(() => document.pointerLockElement?.id === 'game');
   if (!pointerLocked) throw new Error('Pointer lock failed');
-  await a.keyboard.down('KeyW'); await delay(300); await a.keyboard.up('KeyW');
+  const before = (await a.locator('#game').getAttribute('data-position'))?.split(',').map(Number);
+  await a.keyboard.down('KeyW'); await delay(700);
+  await a.keyboard.up('KeyW');
+  const after = (await a.locator('#game').getAttribute('data-position'))?.split(',').map(Number);
+  if (!before || !after || Math.hypot(after[0] - before[0], after[2] - before[2]) < .15) throw new Error(`First-person movement was blocked at spawn: before=${before} after=${after} errors=${errors.join(' | ')}`);
   fs.mkdirSync('artifacts', { recursive: true });
   await a.screenshot({ path: path.resolve('artifacts/browser-a.png') });
   await b.screenshot({ path: path.resolve('artifacts/browser-b.png') });
@@ -39,5 +54,5 @@ try {
   });
   if (!pixels.gl || pixels.width === 0 || pixels.height === 0) throw new Error('WebGL canvas not rendered');
   if (errors.length) throw new Error(`Browser errors: ${errors.join(' | ')}`);
-  console.log(JSON.stringify({ ok: true, room: code, twoClients: true, pointerLocked, canvas: pixels, screenshots: ['artifacts/browser-a.png', 'artifacts/browser-b.png'] }, null, 2));
+  console.log(JSON.stringify({ ok: true, room: code, twoClients: true, pointerLocked, moved: before && after ? Math.hypot(after[0] - before[0], after[2] - before[2]) : 0, canvas: pixels, screenshots: ['artifacts/browser-a.png', 'artifacts/browser-b.png'] }, null, 2));
 } finally { await browser?.close(); server.kill(); }

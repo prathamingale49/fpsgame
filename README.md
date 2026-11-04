@@ -25,9 +25,11 @@ npm run build
 npm start
 ```
 
-The importer uses Open Cascade via `occt-import-js` to tessellate STEP solids, preserves their real millimeter coordinates, rotates STEP Z-up to Three.js Y-up, centers the board, combines solids by material into a GLB, and writes `assets/public/maps/bms.json`. The map contains simplified collision boxes for top-side components at least 0.8 mm across and 0.8 mm high, distributed safe spawn points, and component designators matched to Altium CSV placements. The model and map are used automatically on the next server start. Other board designs can use the same pipeline and JSON/GLB contract. The first import can take several minutes and needs ample RAM.
+The importer uses Open Cascade via `occt-import-js` to tessellate STEP solids, preserves their real millimeter coordinates, rotates STEP Z-up to Three.js Y-up, centers the board, combines solids by material into a GLB, and writes `assets/public/maps/bms.json`. The map contains simplified collision boxes for top-side components at least 0.8 mm across and 0.8 mm high, distributed safe spawn points in a connected open area, and component designators matched to Altium CSV placements. The model and map are used automatically on the next server start. Other board designs can use the same pipeline and JSON/GLB contract. The first import can take several minutes and needs ample RAM.
 
-`bmstop.png` is mapped onto the board surface at its real aspect ratio. The board model retains STEP component placement and approximate material categories. Bottom-side components are rendered but excluded from top-side collisions. This is a game collision approximation; inspect generated boxes and spawns when changing board designs.
+`bmstop.png` is recolored from Altium's layer colors to green solder mask, copper and light silkscreen without moving pixels, then mapped onto the board at its real aspect ratio. The original image is kept alongside it locally. The board model retains STEP component placement and approximate material categories. Bottom-side components are rendered but excluded from top-side collisions. This is a game collision approximation; run `npm run audit:map` to check generated boxes, CSV alignment and spawns when changing board designs.
+
+The STEP assembly also includes a BeagleBone Black model (`Q14`) that spans roughly 90 × 55 mm over the BMS. It is rendered translucent and omitted from collisions so the actual BMS surface remains visible and navigable; its CAD position is preserved.
 
 ## Verification
 
@@ -37,7 +39,7 @@ npm test
 npm run test:browser
 ```
 
-`npm test` checks fixed-step movement, jumps, boundaries, component shot blocking, and two real Colyseus SDK clients joining, moving, shooting, taking damage, dying, respawning, and disconnecting. `test:browser` uses two independent Chrome contexts to verify room joining, WebGL rendering, shared scoreboard, and pointer lock. It requires Chrome at `C:/Program Files/Google/Chrome/Application/chrome.exe` and writes screenshots to `artifacts/`.
+`npm test` checks fixed-step movement, jumps, boundaries, component shot blocking, and two real Colyseus SDK clients joining, moving, shooting, taking damage, dying, respawning, disconnecting, and completing a match. `test:browser` uses two independent Chrome contexts to verify room joining, WebGL rendering, shared scoreboard, page-reload reconnection, pointer lock, and movement from spawn. It requires Chrome at `C:/Program Files/Google/Chrome/Application/chrome.exe` and writes screenshots to `artifacts/`.
 
 ## Hosting
 
@@ -49,6 +51,8 @@ docker run --rm -p 2567:2567 pcb-fps
 ```
 
 The code repository can be shared without the proprietary board assets. A fresh checkout then uses the prototype circuit until the private assembly is imported. `GET /api/health` reports the active map.
+
+To add another board, pass a fourth import argument such as `new-board`, run `npm run audit:map -- new-board`, and set `PCB_MAP_ID=new-board` for the server. The same STEP, CSV, image, GLB, and collision pipeline is used. On PowerShell, set the environment variable with `$env:PCB_MAP_ID='new-board'` before `npm start`.
 
 ## Architecture and limitations
 

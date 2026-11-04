@@ -17,10 +17,12 @@ export class GameRoom extends Room {
   private elapsed = 0;
   private endAt = 0;
   private spawnIndex = 0;
+  private readonly matchSeconds = Number(process.env.PCB_TEST_MATCH_SECONDS || MATCH_SECONDS);
 
   onCreate() {
     this.roomId = Math.random().toString(36).slice(2, 8).toUpperCase();
     this.state.mapId = activeMap.id;
+    this.state.seconds = this.matchSeconds;
     this.setSimulationInterval(() => this.tick(), 1000 / 60);
     this.setPatchRate(50);
     this.onMessage('input', (client, payload: unknown) => {
@@ -65,7 +67,7 @@ export class GameRoom extends Room {
   }
 
   private startMatch() {
-    this.elapsed = 0; this.state.seconds = MATCH_SECONDS; this.state.winner = ''; this.state.phase = 'playing';
+    this.elapsed = 0; this.state.seconds = this.matchSeconds; this.state.winner = ''; this.state.phase = 'playing';
     this.state.players.forEach((p) => { p.kills = 0; p.deaths = 0; p.hp = 100; p.alive = true; p.ammo = WEAPON.magazine; p.reserve = WEAPON.reserve; });
     this.broadcast('feed', { text: 'Match started' });
   }
@@ -74,8 +76,8 @@ export class GameRoom extends Room {
     const now = Date.now() / 1000;
     if (this.state.phase === 'playing') {
       this.elapsed += TICK;
-      this.state.seconds = Math.max(0, Math.ceil(MATCH_SECONDS - this.elapsed));
-      if (this.elapsed >= MATCH_SECONDS) {
+      this.state.seconds = Math.max(0, Math.ceil(this.matchSeconds - this.elapsed));
+      if (this.elapsed >= this.matchSeconds) {
         const scores = [...this.state.players.values()].sort((a, b) => b.kills - a.kills || a.deaths - b.deaths);
         this.state.winner = scores[0]?.name ?? '';
         this.state.phase = 'ended'; this.endAt = now + 8;

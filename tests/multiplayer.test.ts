@@ -42,4 +42,22 @@ describe('real Colyseus clients', () => {
     await b.leave();
     await waitFor(() => a.state.players.size === 1);
   }, 12000);
+  it('announces a winner and resets after a match', async () => {
+    const matchPort = port + 1;
+    const quickServer = spawn(process.execPath, ['--import', 'tsx', 'server/main.ts'], { cwd: process.cwd(), env: { ...process.env, PORT: String(matchPort), PCB_TEST_MAP: '1', PCB_TEST_MATCH_SECONDS: '2' }, stdio: 'ignore' });
+    try {
+      for (let i = 0; i < 60; i++) {
+        try { if ((await fetch(`http://127.0.0.1:${matchPort}/api/health`)).ok) break; } catch { /* starting */ }
+        await delay(100);
+      }
+      const a = await new Client(`ws://127.0.0.1:${matchPort}`).create<MatchState>('pcb', { name: 'Timer A' });
+      const b = await new Client(`ws://127.0.0.1:${matchPort}`).joinById<MatchState>(a.roomId, { name: 'Timer B' });
+      await waitFor(() => a.state.phase === 'playing');
+      await waitFor(() => a.state.phase === 'ended' && !!a.state.winner, 4000);
+      await waitFor(() => b.state.phase === 'ended');
+      expect(b.state.winner).toBe('Timer A');
+      await waitFor(() => a.state.phase === 'playing' && a.state.seconds === 2, 10000);
+      await a.leave(); await b.leave();
+    } finally { quickServer.kill(); }
+  }, 16000);
 });

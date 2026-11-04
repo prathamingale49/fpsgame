@@ -4,6 +4,7 @@ import * as THREE from 'three';
 import { GLTFExporter } from 'three/addons/exporters/GLTFExporter.js';
 import occtimportjs from 'occt-import-js';
 import type { Box, MapData, Spawn } from '../shared/game.js';
+import { recolorTop } from './recolor-top.js';
 
 type CadMesh = { name: string; color?: [number, number, number]; attributes: { position: { array: number[] }; normal: { array: number[] } }; index: { array: number[] } };
 type CadNode = { name: string; meshes: number[]; children: CadNode[] };
@@ -11,7 +12,11 @@ type Bounds = { min: [number, number, number]; max: [number, number, number] };
 const source = process.argv[2];
 const csvPath = process.argv[3];
 const topPath = process.argv[4];
-if (!source || !fs.existsSync(source)) { console.error('Usage: npm run import:step -- <assembly.step> [pick-place.csv] [top.png]'); process.exit(1); }
+const mapId = (process.argv[5] || 'bms').toLowerCase();
+if (!source || !fs.existsSync(source)) { console.error('Usage: npm run import:step -- <assembly.step> [pick-place.csv] [top.png] [map-id]'); process.exit(1); }
+if (!/^[a-z0-9_-]+$/.test(mapId)) throw new Error('Map ID must contain only letters, digits, underscores, or hyphens');
+if (csvPath && !fs.existsSync(csvPath)) throw new Error(`Pick-and-place CSV not found: ${csvPath}`);
+if (topPath && !fs.existsSync(topPath)) throw new Error(`Top artwork not found: ${topPath}`);
 const output = path.resolve('assets/public/maps'); fs.mkdirSync(output, { recursive: true });
 console.log('Importing STEP; a full assembly can take several minutes and substantial RAM.');
 const occt = await occtimportjs();
@@ -36,9 +41,21 @@ const cx = (board.min[0] + board.max[0]) / 2, cy = (board.min[1] + board.max[1])
 const width = board.max[0] - board.min[0], depth = board.max[1] - board.min[1];
 console.log(`Board ${width.toFixed(2)} × ${depth.toFixed(2)} mm, STEP bounds ${JSON.stringify(board)}`);
 
-const palette = [0x335c2d, 0x161b1a, 0xf0ecdf, 0x752720, 0xc6a04a, 0x666f6a, 0x2d3734];
+function nodeMeshes(node: CadNode): number[] { return [...(node.meshes ?? []), ...(node.children ?? []).flatMap(nodeMeshes)]; }
+const assembly = cad.root.children?.find(node => nodeMeshes(node).includes(boardIndex)) ?? cad.root;
+const nodes = assembly.children?.length ? assembly.children : [assembly];
+const ghostIds = new Set<number>();
+for (const node of nodes) {
+  if (nodeMeshes(node).includes(boardIndex)) continue;
+  const ids = nodeMeshes(node); if (!ids.length) continue;
+  const b = ids.map(id => meshBounds[id]).reduce(union);
+  if ((b.max[0] - b.min[0]) * (b.max[1] - b.min[1]) > width * depth * .25) ids.forEach(id => ghostIds.add(id));
+}
+console.log(`Ghosted ${ghostIds.size} solids from oversized mechanical envelopes`);
+const palette = [0x335c2d, 0x161b1a, 0xf0ecdf, 0x752720, 0xc6a04a, 0x666f6a, 0x2d3734, 0x5e7865];
 function materialIndex(mesh: CadMesh, index: number): number {
   if (index === boardIndex) return 0;
+  if (ghostIds.has(index)) return 7;
   const [r, g, b] = mesh.color ?? [.35, .38, .35];
   if (r > .75 && g > .75 && b > .75) return 2;
   if (r > g * 1.5 && r > b * 1.5) return 3;
@@ -67,13 +84,13 @@ groups.forEach((group, category) => {
   geometry.setAttribute('position', new THREE.BufferAttribute(positions, 3));
   geometry.setAttribute('normal', new THREE.BufferAttribute(normals, 3));
   geometry.setIndex(new THREE.BufferAttribute(indices, 1));
-  scene.add(new THREE.Mesh(geometry, new THREE.MeshStandardMaterial({ color: palette[category], roughness: category === 4 ? .36 : .75, metalness: category === 4 ? .7 : .1, side: THREE.DoubleSide })));
+  scene.add(new THREE.Mesh(geometry, new THREE.MeshStandardMaterial({ color: palette[category], roughness: category === 4 ? .36 : .75, metalness: category === 4 ? .7 : .1, transparent: category === 7, opacity: category === 7 ? .035 : 1, depthWrite: category !== 7, side: THREE.DoubleSide })));
 });
 // GLTFExporter uses FileReader in Node even when no textures are involved.
 class NodeFileReader { result: ArrayBuffer | null = null; onloadend: (() => void) | null = null; readAsArrayBuffer(blob: Blob) { blob.arrayBuffer().then(buffer => { this.result = buffer; this.onloadend?.(); }); } }
 (globalThis as unknown as { FileReader: typeof FileReader }).FileReader = NodeFileReader as unknown as typeof FileReader;
 const binary = await new GLTFExporter().parseAsync(scene, { binary: true, onlyVisible: true }) as ArrayBuffer;
-fs.writeFileSync(path.join(output, 'bms.glb'), Buffer.from(binary));
+fs.writeFileSync(path.join(output, `${mapId}.glb`), Buffer.from(binary));
 console.log(`GLB ${(binary.byteLength / 1024 / 1024).toFixed(1)} MB`);
 
 const components: MapData['components'] = [];
@@ -85,16 +102,13 @@ if (csvPath && fs.existsSync(csvPath)) {
     components.push({ ref: fields[0], x: numeric(fields[3]) - cx, z: -(numeric(fields[4]) - cy), rotation: numeric(fields[5]), layer: fields[2] });
   }
 }
-function nodeMeshes(node: CadNode): number[] { return [...(node.meshes ?? []), ...(node.children ?? []).flatMap(nodeMeshes)]; }
 const boxes: Box[] = [];
-const assembly = cad.root.children?.find(node => node.name === 'PCB') ?? cad.root;
-const nodes = assembly.children?.length ? assembly.children : [assembly];
 for (const node of nodes) {
   const ids = nodeMeshes(node).filter(id => id !== boardIndex);
   if (!ids.length) continue;
   const b = ids.map(id => meshBounds[id]).reduce(union);
   const height = b.max[2] - boardTop, w = b.max[0] - b.min[0], d = b.max[1] - b.min[1];
-  if (height < .8 || w < .8 || d < .8 || b.min[2] < boardTop - .6) continue;
+  if (height < .8 || w < .8 || d < .8 || w * d > width * depth * .25) continue;
   boxes.push({ min: [b.min[0] - cx, 0, -(b.max[1] - cy)], max: [b.max[0] - cx, height, -(b.min[1] - cy)], name: node.name });
 }
 const spawns: Spawn[] = [];
@@ -122,7 +136,13 @@ for (let i = 0; i < 8 && candidates.length; i++) {
   spawns.push(candidates.shift()!);
 }
 if (spawns.length < 2) throw new Error('Could not find valid spawn areas');
-const map: MapData = { id: 'bms', title: 'YJSP Battery Management System · Rev 4', width, depth, ground: 0, boxes, spawns, components, model: '/maps/bms.glb', texture: topPath ? '/maps/bms-top.png' : undefined };
-fs.writeFileSync(path.join(output, 'bms.json'), JSON.stringify(map));
-if (topPath && fs.existsSync(topPath)) fs.copyFileSync(topPath, path.join(output, 'bms-top.png'));
+const clearance = (spawn: Spawn) => Math.min(...boxes.map(b => Math.hypot(Math.max(b.min[0] - spawn[0], 0, spawn[0] - b.max[0]), Math.max(b.min[2] - spawn[2], 0, spawn[2] - b.max[2]))));
+const firstSpawn = spawns.reduce((best, spawn, index) => clearance(spawn) > clearance(spawns[best]) ? index : best, 0);
+spawns.unshift(spawns.splice(firstSpawn, 1)[0]);
+const map: MapData = { id: mapId, title: mapId === 'bms' ? 'YJSP Battery Management System · Rev 4' : `${mapId.toUpperCase()} PCB`, width, depth, ground: 0, boxes, spawns, components, model: `/maps/${mapId}.glb`, texture: topPath ? `/maps/${mapId}-top.png` : undefined };
+fs.writeFileSync(path.join(output, `${mapId}.json`), JSON.stringify(map));
+if (topPath && fs.existsSync(topPath)) {
+  fs.copyFileSync(topPath, path.join(output, `${mapId}-top-original.png`));
+  recolorTop(topPath, path.join(output, `${mapId}-top.png`));
+}
 console.log(`Map ready: ${boxes.length} collision boxes, ${spawns.length} spawn points, ${components.length} CSV placements`);

@@ -6,7 +6,9 @@ import { GameRoom, setActiveMap, activeMap } from './room.js';
 import type { MapData } from '../shared/game.js';
 import { testMap } from '../shared/game.js';
 
-const mapFile = path.resolve('assets/public/maps/bms.json');
+const mapId = process.env.PCB_MAP_ID || 'bms';
+if (!/^[a-z0-9_-]+$/.test(mapId)) throw new Error('Invalid PCB_MAP_ID');
+const mapFile = path.resolve(`assets/public/maps/${mapId}.json`);
 if (existsSync(mapFile)) {
   try { setActiveMap(JSON.parse(readFileSync(mapFile, 'utf8')) as MapData); }
   catch (error) { console.error('Could not load BMS map, using prototype:', error); }

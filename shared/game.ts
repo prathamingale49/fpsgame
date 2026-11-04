@@ -48,7 +48,7 @@ export function stepMotion(previous: Motion, input: Input, map: MapData, dt = TI
   const speed = input.sprint ? 12 : 8.5;
   const dx = (-Math.sin(input.yaw) * f + Math.cos(input.yaw) * s) / len * speed * dt;
   const dz = (-Math.cos(input.yaw) * f - Math.sin(input.yaw) * s) / len * speed * dt;
-  if (input.jump && out.grounded) { out.vy = 8.8; out.grounded = false; }
+  if (input.jump && out.grounded) { out.vy = 18.5; out.grounded = false; }
   out.vy -= 23 * dt;
   const oldY = out.y;
   out.y += out.vy * dt;

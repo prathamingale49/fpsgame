@@ -22,6 +22,14 @@ describe('movement', () => {
     for (let i = 0; i < 120; i++) m = stepMotion(m, input, testMap);
     expect(m.z).toBeGreaterThan(-18);
   });
+  it('can jump onto a large component', () => {
+    const map = { ...testMap, boxes: [{ min: [-2, 0, -5] as [number, number, number], max: [2, 6, -2] as [number, number, number] }] };
+    let m = initialMotion([0, 0, 0]);
+    for (let i = 0; i < 42; i++) m = stepMotion(m, { ...input, jump: i === 0 }, map);
+    expect(m.z).toBeLessThan(-2);
+    for (let i = 0; i < 90; i++) m = stepMotion(m, { ...input, forward: 0 }, map);
+    expect(m.y).toBeCloseTo(6, 2); expect(m.grounded).toBe(true);
+  });
 });
 describe('combat', () => {
   it('hits player before distant geometry', () => {
