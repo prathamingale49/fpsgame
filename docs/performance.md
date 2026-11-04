@@ -1,6 +1,6 @@
 # Gameplay and rendering measurements
 
-Measured on 2026-11-03 with Chrome headless on Windows using SwiftShader (software WebGL), an 800 × 500 viewport, device scale factor 2, and the same private BMS assets on both revisions. `main` was commit `d0fb64f`; the branch is the gameplay overhaul. `tools/perf-check.ts` sampled 30 `requestAnimationFrame` intervals after the model loaded. Values are milliseconds; lower is better. Results will vary substantially on real GPUs.
+Measured on 2026-11-03 with Chrome headless on Windows using SwiftShader (software WebGL), an 800 × 500 viewport, device scale factor 2, and the same BMS assets on both revisions. `main` was commit `d0fb64f`; the branch is the gameplay overhaul. `tools/perf-check.ts` sampled 30 `requestAnimationFrame` intervals after the model loaded. Values are milliseconds; lower is better. Results will vary substantially on real GPUs.
 
 | Scene | Players | `main` median / p95 | Branch median / p95 | Canvas pixels |
 | --- | ---: | ---: | ---: | --- |
@@ -43,4 +43,4 @@ The investigation found two accumulating costs. Chrome can schedule `setInterval
 
 A repeat using forced SwiftShader confirmed stable gameplay state but unsuitable rendering measurements: p95 changed from about 650 to 666 ms while mean FPS varied from 3.4–3.7 to 2.2 due to two software-rendered BMS clients sharing CPU. Pending inputs stayed below 46, correction p95 was zero, textures stayed fixed, and query caches stopped growing. Use `$env:SOAK_RENDERER='hardware'` before `npm run test:soak` on PowerShell for representative frame measurements; omit it for the deterministic software fallback.
 
-Reproduce with `npm run build`, then `npx tsx tools/perf-check.ts` using `BENCH_MAP=test|bms` and `BENCH_PLAYERS=1|2`. Set `BENCH_TARGET` to a built baseline checkout for comparison. Set `BENCH_BASELINE` to that checkout and run `npx tsx tools/bench-motion.ts` for collision timings. Run `npm run test:soak` for the 180-second two-client soak. The BMS measurements require the private map assets in each checkout.
+Reproduce with `npm run build`, then `npx tsx tools/perf-check.ts` using `BENCH_MAP=test|bms` and `BENCH_PLAYERS=1|2`. Set `BENCH_TARGET` to a built baseline checkout for comparison. Set `BENCH_BASELINE` to that checkout and run `npx tsx tools/bench-motion.ts` for collision timings. Run `npm run test:soak` for the 180-second two-client soak. The BMS assets are versioned under `assets/public/maps/`.

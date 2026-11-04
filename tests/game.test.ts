@@ -155,14 +155,21 @@ describe.skipIf(!fs.existsSync(bmsFile))('imported BMS collision geometry', () =
       expect(hit.target).toBeUndefined();
     }
   });
-  it('lets a player mantle an actual tall BMS connector', () => {
+  it('keeps J6 unreachable at the small default and mantleable at the reference dev scale', () => {
     const connector = bms.boxes.find(b => b.name === 'J6');
     expect(connector?.climbable).toBe(true);
     const map = { ...bms, boxes: [connector!] };
     const x = (connector!.min[0] + connector!.max[0]) / 2;
-    let player = initialMotion([x, 0, connector!.max[2] + 3]);
-    for (let i = 0; i < 100; i++) player = stepMotion(player, { ...input, forward: i < 40 ? 1 : 0, jump: true }, map);
-    expect(player.y).toBeCloseTo(connector!.max[1], 2);
-    expect(player.grounded).toBe(true);
+    const spawn: [number, number, number] = [x, 0, connector!.max[2] + 3];
+    let smallPlayer = initialMotion(spawn);
+    for (let i = 0; i < 100; i++) smallPlayer = stepMotion(smallPlayer, { ...input, forward: i < 40 ? 1 : 0, jump: true }, map);
+    expect(smallPlayer.y).toBe(0);
+    expect(smallPlayer.z).toBeGreaterThan(connector!.max[2]);
+
+    const referenceTuning = tuningForHeight(1.8);
+    let referencePlayer = initialMotion(spawn);
+    for (let i = 0; i < 100; i++) referencePlayer = stepMotion(referencePlayer, { ...input, forward: i < 40 ? 1 : 0, jump: true }, map, TICK, undefined, referenceTuning);
+    expect(referencePlayer.y).toBeCloseTo(connector!.max[1], 2);
+    expect(referencePlayer.grounded).toBe(true);
   });
 });

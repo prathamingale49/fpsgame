@@ -2,7 +2,7 @@
 
 Browser first-person deathmatch on a real YJSP Battery Management System (BMS) PCB. The frontend uses Three.js and Vite; a Colyseus/Node.js server owns player movement, collisions, weapons, and multiplayer game state.
 
-**You can start playing without supplying any PCB files.** The game automatically uses the included prototype map until you import the BMS STEP assembly. You do not have to upload STEP, CSV, or PNG files to GitHub to play locally.
+The repository includes the YJSP BMS source files and generated map, so a fresh clone starts with the real PCB. The prototype map remains available as a fallback when no generated map is present.
 
 ## 1. Install prerequisites
 
@@ -39,7 +39,7 @@ git switch main
 git pull --ff-only
 ```
 
-Do not discard local changes to switch branches. Files generated under `assets/public/maps/` are ignored by Git and normally remain in place when switching branches.
+Do not discard local changes to switch branches. Generated BMS map artifacts are versioned on `main`, so pulling updates also updates the playable board.
 
 ## 3. Install dependencies
 
@@ -86,9 +86,9 @@ The scale is a server-authoritative **room-wide development setting**, not a sel
 
 Controls: WASD move, mouse aim, left click fire, Space jump or hold Space while moving into a connector ledge to climb, Shift sprint, R reload, Tab scoreboard, F3 performance overlay, Esc unlock pointer. Opponents appear as small rocket-shaped characters with overhead health bars that drain from green toward red as they take damage. Players can fall from PCB edges; environmental deaths count as deaths without awarding a kill. The Solder Blaster has a 30-round magazine and collects reserve ammunition from solder spools around the map. Graphics quality, mouse sensitivity, and sound volume are available under Settings. Matches last five minutes, with unlimited respawns. When the timer ends, the highest kill count wins; ties favor fewer deaths.
 
-## 5. Import the real BMS PCB (optional)
+## 5. Regenerate the real BMS PCB (optional)
 
-You need the STEP assembly to generate a real PCB map. The pick-and-place CSV and top artwork PNG are recommended for a more complete import, but the importer can also run with STEP alone.
+The repository already includes the generated BMS map and its STEP, pick-and-place, and artwork sources. Run the importer again after changing the geometry or collision rules. The importer can also build other maps from external files.
 
 | Source file | Used for | Required? |
 | --- | --- | --- |
@@ -96,12 +96,18 @@ You need the STEP assembly to generate a real PCB map. The pick-and-place CSV an
 | Altium pick-and-place `.csv` | Component references and positions | Recommended |
 | Top artwork `.png` | Solder mask, traces, and silkscreen texture | Recommended |
 
-You can store these anywhere on your computer. The examples below use Windows paths, but the same commands work with macOS/Linux paths.
+The checked-in BMS sources are under `assets/source/`. You can also store source files elsewhere. The examples below use Windows paths, but the same commands work with macOS/Linux paths.
 
 Stop the running development server with **Ctrl+C**, then from the `fpsgame` folder run:
 
 ```sh
 npm run import:step -- "C:/path/to/bms.step" "C:/path/to/pick-place.csv" "C:/path/to/bmstop.png"
+```
+
+To regenerate from the checked-in sources on Windows:
+
+```sh
+npm run import:step -- "assets/source/latest bms.step" "assets/source/Pick Place for PCB1.csv" "assets/source/bmstop.png"
 ```
 
 If you only have the STEP file:
@@ -177,7 +183,7 @@ docker build -t pcb-fps .
 docker run --rm -p 2567:2567 pcb-fps
 ```
 
-**For local play, there is no need to upload any PCB files to GitHub.** By default `.gitignore` excludes `assets/public/maps/*` except `.gitkeep`, so generated BMS maps are not committed automatically. If you later deploy directly from GitHub and want the BMS online, the deployment build must receive `bms.json`, `bms.glb`, and (if referenced) `bms-top.png`—for example by intentionally committing those generated assets or providing them in the build environment. **The original STEP and pick-and-place CSV are not required at runtime.** Check large `.glb` sizes before committing to GitHub; large binaries may need a different distribution method.
+The YJSP source files and generated BMS map are committed to GitHub. Deployments built from this repository therefore include `bms.json`, `bms.glb`, and the top artwork automatically. The STEP and pick-and-place CSV are retained for reproducible regeneration but are not required at runtime.
 
 To add another board, pass a fourth import argument such as `new-board`, run `npm run audit:map -- new-board`, and set `PCB_MAP_ID=new-board` for the server. The same STEP, CSV, image, GLB, and collision pipeline is used. On PowerShell, set the environment variable with `$env:PCB_MAP_ID='new-board'` before `npm start`.
 
