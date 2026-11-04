@@ -19,6 +19,9 @@ document (`git log -1`).
   Z edges, and clamps to board bounds during cooldown. All 15 transition/combat
   helper tests pass, including 90 consecutive held-forward ticks at each edge.
 - Movement protocol bumped to 4 for side and heading state.
+- Multiplayer milestone: schema/server preserve side, cooldown and heading;
+  respawns reset to front; side filters protect shooting and ammo collection.
+  Real Colyseus two-client round-trip/combat test passes (5 seconds).
 
 ## Changed files
 
@@ -31,18 +34,13 @@ document (`git log -1`).
 2. Integrate heading adjustment / inward placement with cooldown to prevent
    repeated held-outward-input edge loops. Transition helpers and edge tests
    exist, but sustained-movement loop prevention still needs integration tests.
-3. Synchronize side and cooldown, update prediction/reconciliation and protocol,
-   restrict shooting and pickups by side, add multiplayer tests.
+3. Multiplayer integration is implemented; run final full-suite verification.
 4. Rotate the existing model for backside rendering, hide opposite-side players,
    add FRONT/BACK HUD indicator, keep camera upright.
 5. Run full tests/build and real-browser BMS checks; document behavior; open PR.
 
 ## Known limitations
 
-Feature is not yet playable. Generated BMS map has not yet been regenerated.
-Legacy map behavior is unchanged. New side fields are currently optional and
-are not synchronized by the server. Do not enable `back` on a deployed map yet:
-server motion reconstruction currently drops side/cooldown, and the renderer
-does not switch surfaces. Heading preservation and held-input loop prevention
-remain unresolved. Milestones 1 and 2 foundations are checkpointed; both need
-integration verification before they can be considered complete.
+Generated BMS map regeneration is running. Physics and server integration are
+implemented; renderer/prediction edits are being verified next. Real BMS browser
+verification and the final full suite remain pending.

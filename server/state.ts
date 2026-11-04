@@ -2,6 +2,7 @@ import { schema, t, type SchemaType } from '@colyseus/schema';
 
 export const PlayerState = schema({
   name: t.string().default('Engineer'),
+  side: t.string().default('front'), transitionCooldown: t.float32().default(0), headingOffset: t.float32().default(0),
   x: t.float32().default(0), y: t.float32().default(0), z: t.float32().default(0),
   vy: t.float32().default(0), grounded: t.boolean().default(true), jumpHeld: t.boolean().default(false), mantleTarget: t.float32().default(0),
   yaw: t.float32().default(0), pitch: t.float32().default(0),
@@ -11,7 +12,7 @@ export const PlayerState = schema({
   ack: t.uint32().default(0), connected: t.boolean().default(true),
 }, 'PlayerState');
 export type PlayerState = SchemaType<typeof PlayerState>;
-export const PickupState = schema({ x: t.float32(), y: t.float32(), z: t.float32(), active: t.boolean().default(true) }, 'PickupState');
+export const PickupState = schema({ x: t.float32(), y: t.float32(), z: t.float32(), side: t.string().default('front'), active: t.boolean().default(true) }, 'PickupState');
 export type PickupState = SchemaType<typeof PickupState>;
 
 export const MatchState = schema({
