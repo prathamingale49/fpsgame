@@ -1,7 +1,7 @@
 # Two-sided PCB implementation progress
 
 Branch: `codex/two-sided-pcb`; base: `208d8b8` (latest main at start).
-Previous checkpoint: `5298915`. Latest checkpoint: the commit containing this
+Previous checkpoint: `f154db1`. Latest checkpoint: the commit containing this
 document (`git log -1`).
 
 ## Completed
@@ -41,9 +41,10 @@ document (`git log -1`).
 
 ## Remaining / exact next steps
 
-Implementation milestones and the final stricter browser repeat are complete.
-Commit this integration checkpoint, push the branch and open a PR against main.
-Do not merge without user approval.
+All implementation milestones, final verification and branch publication are
+complete. PR: https://github.com/prathamingale49/fpsgame/pull/3 (against main).
+No required implementation steps remain. Await user feedback and PR review;
+do not merge without user approval.
 
 ## Validation and decisions
 
