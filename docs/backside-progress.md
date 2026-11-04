@@ -26,6 +26,11 @@ document (`git log -1`).
   shared/independent meshes, traversable gaps at .90 mm, solid posts and front
   connectors, welded seams, clipping sloped geometry, and boundary-only faces.
   Existing bottom extraction tests also pass. BMS regeneration is next.
+- Test checkpoint: `d0aae51`; targeted extraction/transition/real-multiplayer
+  check: 28 tests passing. SHA-256 snapshot assertions now guard the complete
+  front collision array and all original bottom-mounted component boxes.
+  One BMS regeneration is running; final map counts/audit/build/full suite
+  and actual gap-route verification remain pending.
 
 - Map contract supports optional `back` metadata without changing legacy maps.
 - Importer extracts bottom component bounds from actual STEP substrate bottom.

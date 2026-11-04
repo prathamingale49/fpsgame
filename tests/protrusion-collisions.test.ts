@@ -2,6 +2,8 @@ import { expect, it } from 'vitest';
 import * as THREE from 'three';
 import { protrusionBoxes, type Bounds, type CollisionMesh } from '../tools/board-surfaces.js';
 import { initialMotion, PLAYER, stepMotion, testMap, type MapData } from '../shared/game.js';
+import fs from 'node:fs';
+import { createHash } from 'node:crypto';
 
 const board: Bounds = { min: [-10, -10, -2], max: [10, 10, 0] };
 function cube(x: number, y: number, z: number, w: number, d: number, h: number): CollisionMesh {
@@ -67,4 +69,13 @@ it('rejects geometry only touching the boundary without protruding', () => {
   const g = new THREE.CylinderGeometry(5, 1, 4, 8); g.rotateX(Math.PI / 2);
   // Only the zero-thickness boundary touches the substrate: no protrusion.
   expect(protrusionBoxes([{ attributes: { position: { array: g.attributes.position.array } }, index: { array: g.index!.array } }], board)).toEqual([]);
+});
+it.skipIf(!fs.existsSync('assets/public/maps/bms.json'))('preserves all BMS front and bottom-mounted component collision boxes', () => {
+  const map = JSON.parse(fs.readFileSync('assets/public/maps/bms.json', 'utf8')) as MapData;
+  const bottom = new Set(map.components!.filter(c => c.layer === 'BottomLayer').map(c => c.ref));
+  const hash = (value: unknown) => createHash('sha256').update(JSON.stringify(value)).digest('hex');
+  // Snapshots from the original two-sided import: deliberate source-geometry
+  // changes require refreshing these, but a protrusion-only fix must not.
+  expect(hash(map.boxes)).toBe('2c81c930c68ad218bb1699d5a4e4192864d80f6010407b108dfa1a6cd131b7ff');
+  expect(hash(map.back!.boxes.filter(b => bottom.has(b.name!)))).toBe('48836c20946b917719941323ccc8d0733b41c3d0fc5ea75f18717db75eb2293e');
 });
