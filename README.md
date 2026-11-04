@@ -6,7 +6,7 @@ Browser first-person deathmatch on a real YJSP Battery Management System (BMS) P
 
 ## 1. Install prerequisites
 
-- **Node.js 22 or newer** (includes `npm`): https://nodejs.org/
+- **Node.js 22.12 or newer** (includes `npm`): https://nodejs.org/
 - **Git**: https://git-scm.com/downloads (or download the repository ZIP from GitHub).
 - **Chrome or another desktop browser with WebGL support**. The game uses mouse pointer lock and is intended for keyboard/mouse play.
 
@@ -18,7 +18,7 @@ npm --version
 git --version
 ```
 
-If `node` or `npm` is not recognized, install Node.js and reopen your terminal. If the Node.js version is below 22, update it first.
+If `node` or `npm` is not recognized, install Node.js and reopen your terminal. If the Node.js version is below 22.12, update it first (required by the installed Vite version).
 
 ## 2. Download the game
 
@@ -37,6 +37,7 @@ If you **already cloned** the game, open a terminal in its `fpsgame` directory a
 ```sh
 git fetch origin
 git switch feat/dev-player-scale
+git pull --ff-only
 ```
 
 Do not discard local changes to switch branches. Files generated under `assets/public/maps/` are ignored by Git and normally remain in place when switching branches.
@@ -180,7 +181,7 @@ To add another board, pass a fourth import argument such as `new-board`, run `np
 
 | Problem | What to check |
 | --- | --- |
-| `node` or `npm` not recognized | Install Node.js 22+, close and reopen the terminal, then run `node --version`. |
+| `node` or `npm` not recognized | Install Node.js 22.12+, close and reopen the terminal, then run `node --version`. |
 | Dependency install fails | Run `npm ci` **inside** `fpsgame` where `package-lock.json` exists. Check your network connection and Node.js version. |
 | Browser cannot connect or says server version differs | Both server and frontend must be started from the **same branch**. Stop old instances, run `npm run dev:scale` again, then hard-refresh the page. |
 | `localhost:5173` does not open | Leave `npm run dev` or `npm run dev:scale` running and check its terminal output for an error or port conflict. |
