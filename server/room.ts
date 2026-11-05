@@ -45,7 +45,7 @@ export class GameRoom extends Room {
   onCreate() {
     this.state.practice = this.practice;
     this.state.pickupPractice = this.pickupPractice;
-    if (this.pickupPractice) weaponPickupLocations(activeMap).forEach((point, index) => this.state.weaponPickups.set(String(index), new WeaponPickupState({ ...point, weapon: (['iron', 'air', 'pump'] as const)[index] })));
+    if (this.pickupPractice) weaponPickupLocations(activeMap).forEach((point, index) => this.state.weaponPickups.set(String(index), new WeaponPickupState({ ...point, weapon: (['iron', 'air', 'pump'] as const)[index % 3] })));
     if (this.practice) { this.maxClients = 1; void this.setPrivate(true); }
     this.onMessage('practice:movement', () => { if (this.practice) this.state.npcMovement = !this.state.npcMovement; });
     this.roomId = Math.random().toString(36).slice(2, 8).toUpperCase();
