@@ -3,9 +3,7 @@ import { validWeaponId } from './weapons.js';
 export const WEAPON_PICKUPS = { radius: 1.5, respawnSeconds: 15 } as const;
 export type WeaponPickup = { x: number; y: number; z: number; side: string; weapon: string; active: boolean; version: number };
 type Point = { x: number; y: number; z: number; side: BoardSide };
-const cache = new WeakMap<MapData, Point[]>();
-export function weaponPickupLocations(map: MapData): Point[] {
-  const cached = cache.get(map); if (cached) return cached;
+export function weaponPickupLocations(map: MapData, seed = Math.floor(Math.random() * 0xffffffff)): Point[] {
   const regions: Partial<Record<BoardSide, Point[]>> = {};
   for (const side of (map.back?.enabled ? ['front', 'back'] : ['front']) as BoardSide[]) {
     const boxes = surfaceMap(map, side).boxes;
@@ -35,11 +33,9 @@ export function weaponPickupLocations(map: MapData): Point[] {
     }
     regions[side] = region;
   }
-  // Three spread-out clusters, each with one of every special weapon.
-  // Seeded by map identity/geometry: varied between PCB maps, stable for all clients
-  // and room instances using the same map.
-  let seed = 2166136261;
-  for (const char of `${map.id}:${map.width}:${map.depth}`) seed = Math.imul(seed ^ char.charCodeAt(0), 16777619);
+  // Nine independent placements, not clusters. The server supplies a per-room
+  // random seed; tests can provide a fixed seed to reproduce an arrangement.
+  seed = (seed >>> 0) || 1;
   const random = () => { seed ^= seed << 13; seed ^= seed >>> 17; seed ^= seed << 5; return (seed >>> 0) / 4294967296; };
   const valid = (p: Point) =>
     Math.abs(p.x) <= map.width / 2 - .9 && Math.abs(p.z) <= map.depth / 2 - .9 &&
@@ -50,38 +46,32 @@ export function weaponPickupLocations(map: MapData): Point[] {
     back: (regions.back ?? []).filter(valid),
   };
   const chosen: Point[] = [];
-  const centers: Point[] = [];
-  for (let cluster = 0; cluster < 3; cluster++) {
-    const side: BoardSide = cluster === 1 && available.back.length >= 3 ? 'back' : 'front';
+  const mapScale = Math.min(map.width, map.depth);
+  const minAny = Math.max(1.8, mapScale * .075);
+  const minSame = Math.max(minAny, mapScale * .20);
+  // IDs 0,3,6 are Iron; 1,4,7 are Hot Air; 2,5,8 are Pump.
+  // On two-sided boards, alternate surfaces so guns occupy the whole board.
+  for (let i = 0; i < 9; i++) {
+    const side: BoardSide = i % 2 === 1 && available.back.length ? 'back' : 'front';
     const candidates = available[side];
     if (!candidates.length) continue;
-    // Choose a seeded candidate among the widely separated positions.
-    const scored = candidates.map(p => ({
-      p,
-      distance: centers.filter(c => c.side === side).reduce(
-        (min, c) => Math.min(min, Math.hypot(c.x - p.x, c.z - p.z)), Infinity),
-    }));
-    scored.sort((a, b) => b.distance - a.distance);
-    const anchor = scored[Math.floor(random() * Math.min(scored.length, Math.max(1, Math.ceil(scored.length * .12))))].p;
-    centers.push(anchor);
-    const local = candidates.filter(p =>
-      Math.hypot(p.x - anchor.x, p.z - anchor.z) <= 6 &&
-      chosen.filter(q => q.side === side).every(q => Math.hypot(p.x - q.x, p.z - q.z) >= 1.8));
-    // The first item in each cluster is close to the anchor; the rest are
-    // distributed within a short walking distance, never overlapping.
-    for (let weapon = 0; weapon < 3; weapon++) {
-      const options = local.filter(p => chosen.filter(q => q.side === side).every(q =>
-        Math.hypot(p.x - q.x, p.z - q.z) >= 1.8));
-      const fallback = candidates.filter(p => chosen.filter(q => q.side === side).every(q =>
-        Math.hypot(p.x - q.x, p.z - q.z) >= 1.8));
-      const pool = options.length ? options : fallback;
-      if (!pool.length) break;
-      pool.sort((a, b) => Math.hypot(a.x - anchor.x, a.z - anchor.z) - Math.hypot(b.x - anchor.x, b.z - anchor.z));
-      const point = pool[Math.floor(random() * Math.min(pool.length, Math.max(1, Math.ceil(pool.length * .4))))];
-      chosen.push(point);
-    }
+    const same = chosen.filter((p, j) => p.side === side && j % 3 === i % 3);
+    const ranked = candidates.map(p => {
+      const spacing = (points: Point[]) => points.length
+        ? Math.min(...points.map(q => Math.hypot(p.x - q.x, p.z - q.z))) : mapScale;
+      return { p, any: spacing(chosen.filter(q => q.side === side)), own: spacing(same) };
+    }).filter(v => v.any >= 1.8);
+    if (!ranked.length) continue;
+    // Prefer wide separation, with extra priority on duplicates of one weapon.
+    // If a narrow map cannot satisfy the target spacing, use the best available.
+    const spacious = ranked.filter(v => v.any >= minAny && v.own >= minSame);
+    const pool = spacious.length ? spacious : ranked;
+    pool.sort((a, b) => (b.any + b.own * 1.5) - (a.any + a.own * 1.5));
+    const shortlist = Math.max(1, Math.ceil(pool.length * .03));
+    chosen.push(pool[Math.floor(random() * shortlist)].p);
   }
-  cache.set(map, chosen); return chosen;
+  return chosen;
+
 }
 export function canCollectWeapon(player: { x: number; y: number; z: number; side: string; alive: boolean }, pickup: WeaponPickup, map: MapData): boolean {
   if (!player.alive || !pickup.active || !validWeaponId(pickup.weapon) || pickup.weapon === 'solder' || player.side !== pickup.side) return false;
