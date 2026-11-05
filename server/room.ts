@@ -389,7 +389,9 @@ export class GameRoom extends Room {
   private damage(id: string, targetId: string, amount: number, now: number) {
     const p = this.state.players.get(id), target = this.state.players.get(targetId); if (!p || !target || !target.alive) return;
     target.hp = Math.max(0, target.hp - amount);
-    this.broadcast('damage', { target: targetId, shooter: id, amount });
+    const feedback = { target: targetId, shooter: id, amount, eliminated: target.hp === 0, side: target.side, x: target.x, y: target.y, z: target.z };
+    // Victim needs the damage flash; only the attacker needs hit/number feedback.
+    for (const client of this.clients) if (client.sessionId === id || client.sessionId === targetId) client.send('damage', feedback);
     if (target.hp === 0) {
       this.dropSpecial(targetId);
       target.alive = false; target.deaths++; p.kills++; target.ads = false; target.sniperReloadAt = 0;

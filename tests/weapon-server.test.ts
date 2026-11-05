@@ -162,3 +162,33 @@ it('drops a carried special exactly once on an authoritative kill', async () => 
   peer.send('weapon:collect', { id: '1', version: 0 }); await delay(100);
   expect([...r.state.weaponPickups.values()].filter(p => p.dropped)).toHaveLength(1);
 }, 7000);
+for (const weapon of ['solder', 'iron', 'air', 'pump', 'sniper']) it(`sends confirmed ${weapon} damage only to the attacker and victim`, async () => {
+  const r = await open('pcb');
+  const join = async () => { const peer = await new Client(`ws://localhost:${port}`).joinById<MatchState>(r.roomId, { protocol: MOVEMENT_PROTOCOL }); rooms.push(peer); peer.onMessage('*', () => {}); await wait(() => !!peer.state.players?.get(peer.sessionId)); return peer; };
+  const victim = await join(), observer = await join();
+  for (let seq = 1; seq <= 6; seq++) observer.send('input', { seq, forward: 0, strafe: 1, yaw: 0, pitch: 0, jump: false, sprint: false });
+  await wait(() => human(observer).ack === 6);
+  for (let seq = 1; seq <= 24; seq++) victim.send('input', { seq, forward: 1, strafe: 0, yaw: 0, pitch: 0, jump: false, sprint: false });
+  await wait(() => human(victim).ack === 24);
+  const damage: { shooter: string; target: string; amount: number; eliminated: boolean; side: string }[] = [], unrelated: unknown[] = [], eliminations: unknown[] = [], otherKills: unknown[] = [];
+  r.onMessage('damage', m => damage.push(m)); observer.onMessage('damage', m => unrelated.push(m));
+  r.onMessage('elimination', m => eliminations.push(m)); observer.onMessage('elimination', m => otherKills.push(m));
+  if (weapon !== 'solder') { const id = ({ iron: '0', air: '1', pump: '2', sniper: '9' } as Record<string, string>)[weapon];
+    // Fixture pickup 2 is deliberately distant; move to it only for this test.
+    if (weapon === 'pump') { for (let seq = 1; seq <= 69; seq++) r.send('input', { seq, forward: 0, strafe: 1, yaw: 0, pitch: 0, jump: false, sprint: false }); await wait(() => human(r).ack === 69); }
+    r.send('weapon:collect', { id, version: r.state.weaponPickups.get(id)!.version }); await wait(() => human(r).weapon === weapon);
+    if (weapon === 'pump') { for (let seq = 70; seq <= 138; seq++) r.send('input', { seq, forward: 0, strafe: -1, yaw: 0, pitch: 0, jump: false, sprint: false }); await wait(() => human(r).ack === 138); }
+  }
+  const aim = () => ({ ...shot(r), yaw: Math.atan2(human(r).x - human(victim).x, human(r).z - human(victim).z) });
+  if (weapon === 'iron') { r.send('weapon:trigger', { action: 'start', shot: aim() }); await delay(200); r.send('weapon:trigger', { action: 'release', shot: aim() }); }
+  else if (weapon === 'air') r.send('weapon:trigger', { action: 'start', shot: aim() });
+  else { if (weapon === 'sniper') r.send('weapon:ads', true); r.send('shoot', aim()); }
+  await wait(() => damage.some(m => m.target === victim.sessionId));
+  if (weapon === 'air') r.send('weapon:trigger', { action: 'cancel' });
+  await delay(120);
+  const hits = damage.filter(m => m.target === victim.sessionId);
+  expect(hits.every(m => m.shooter === r.sessionId && m.side === 'front' && m.amount > 0)).toBe(true);
+  expect(human(victim).hp).toBeCloseTo(Math.max(0, 100 - hits.reduce((sum, m) => sum + m.amount, 0)), 3);
+  expect(unrelated).toHaveLength(0); expect(otherKills).toHaveLength(0);
+  if (weapon === 'sniper') { expect(hits[0].amount).toBe(100); expect(hits[0].eliminated).toBe(true); expect(eliminations).toHaveLength(1); }
+}, 10000);

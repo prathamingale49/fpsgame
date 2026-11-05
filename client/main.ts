@@ -8,6 +8,7 @@ import { WEAPONS, WEAPON_IDS, CHARGE, HEAT, type WeaponId } from '../shared/weap
 import { createWeaponModel, animateWeapon, disposeWeaponModel } from './weapon-models';
 import { WEAPON_PICKUPS } from '../shared/weapon-pickups';
 import { EdgeOrbit } from './edge-orbit';
+import { mergeDamageNumber, damageNumberVisible, type DamageFeedback, type DamageNumber } from './damage-feedback';
 
 const el = <T extends HTMLElement>(id: string) => document.getElementById(id) as T;
 document.title = 'YJSPS · YJSP';
@@ -21,7 +22,7 @@ let nearbyWeapon: { id: string; version: number } | null = null, visualFireAt = 
 let visualFireWeapon: WeaponId = 'solder';
 let showNpcHitboxes = false;
 const npcHitboxes = new Map<string, THREE.Box3Helper>();
-const damageNumbers: { element: HTMLElement; position: THREE.Vector3; born: number }[] = [];
+const damageNumbers: (DamageNumber & { element: HTMLElement; roomId: string })[] = [];
 const weaponStatus = document.createElement('div'); weaponStatus.id = 'weapon-status';
 weaponStatus.style.cssText = 'position:absolute;right:28px;bottom:145px;color:#ffd24a;font:12px monospace;text-align:right;pointer-events:none';
 el('hud').append(weaponStatus);
@@ -298,7 +299,12 @@ function showFeed(text: string, chain = 1) {
   setTimeout(() => item.remove(), 5000);
   while (el('kill-feed').children.length > 5) el('kill-feed').lastElementChild?.remove();
 }
-function flashHit() { el('hitmarker').classList.remove('hidden'); sound(1050, .08, 'sine'); setTimeout(() => el('hitmarker').classList.add('hidden'), 170); }
+let hitTimer: ReturnType<typeof setTimeout> | undefined, lastHitSound = -Infinity;
+function flashHit(eliminated = false) {
+  clearTimeout(hitTimer); el('hitmarker').classList.remove('hidden'); el('hitmarker').classList.toggle('confirmed-kill', eliminated);
+  if (!eliminated && performance.now() - lastHitSound > 80) { sound(1050, .045, 'sine'); lastHitSound = performance.now(); }
+  hitTimer = setTimeout(() => el('hitmarker').classList.add('hidden'), eliminated ? 300 : 170);
+}
 function flashDamage() { el('damage-flash').style.opacity = '.8'; sound(130, .2); setTimeout(() => el('damage-flash').style.opacity = '0', 180); }
 function makeSpool(): THREE.Group {
   const group = new THREE.Group();
@@ -446,16 +452,16 @@ async function connect(mode: 'play' | 'create' | 'join' | 'reconnect' | 'practic
         } else if (msg.weapon !== 'air') addTracer(msg.from, msg.to, msg.weapon === 'iron' ? '#a9b8ff' : msg.weapon === 'pump' ? '#ffb347' : undefined);
         if (msg.weapon !== 'air') addImpactSparks(msg.from, msg.to);
       }
-      if (msg.shooter === room?.sessionId && msg.hit) flashHit();
     });
-    room.onMessage('damage', (msg: { target: string; amount: number }) => {
+    room.onMessage('damage', (msg: DamageFeedback) => {
       if (msg.target === room?.sessionId) flashDamage();
-      const target = room?.state.players?.get(msg.target);
-      if (room?.state.practice && target?.npc && target.side === local.side) {
-        const element = document.createElement('div'); element.textContent = `-${Number(msg.amount.toFixed(1))}`;
-        element.style.cssText = 'position:fixed;left:0;top:0;color:#ffd24a;font:bold 22px monospace;pointer-events:none;z-index:4';
-        document.body.append(element); damageNumbers.push({ element, position: new THREE.Vector3(target.x, target.y + playerTuning.height, target.z), born: performance.now() });
-      }
+      if (!room || msg.shooter !== room.sessionId) return;
+      flashHit(msg.eliminated);
+      const now = performance.now();
+      if (mergeDamageNumber(damageNumbers, msg, now)) return;
+      const element = document.createElement('div'); element.className = 'floating-damage';
+      document.body.append(element); damageNumbers.push({ ...msg, element, roomId: room.roomId, born: now, updated: now });
+      if (damageNumbers.length > 6) damageNumbers.shift()!.element.remove();
     });
     room.onMessage('pickup', (msg: { player: string; amount: number }) => { if (msg.player === room?.sessionId) { showFeed(`+${msg.amount} solder rounds`); sound(710, .16, 'sine'); } });
     room.onDrop(() => { recordMovement('drop', me?.ack ?? 0); mouseDown = false; pending = []; lastSentInput = null; showFeed('Connection lost · reconnecting'); });
@@ -725,9 +731,14 @@ function frame(now: number) {
   }
   for (let i = damageNumbers.length - 1; i >= 0; i--) {
     const number = damageNumbers[i], age = (now - number.born) / 1000;
-    if (age > 1 || !room?.state.practice) { number.element.remove(); damageNumbers.splice(i, 1); continue; }
-    const projected = number.position.clone().add(new THREE.Vector3(0, age, 0)).project(camera);
-    number.element.style.display = boardFlip || projected.z > 1 ? 'none' : '';
+    if (age > 1 || !room || number.roomId !== room.roomId) { number.element.remove(); damageNumbers.splice(i, 1); continue; }
+    const target = room.state.players.get(number.target), remote = remotes.get(number.target);
+    if (target?.alive && target.side === number.side) { const pos = remote?.mesh.position ?? target; number.x = pos.x; number.y = pos.y; number.z = pos.z; }
+    const head: [number, number, number] = [number.x, number.y + playerTuning.height, number.z];
+    const projected = new THREE.Vector3(...head).add(new THREE.Vector3(0, age, 0)).project(camera);
+    number.element.textContent = `-${Number(number.amount.toFixed(1))}`;
+    number.element.classList.toggle('elimination-damage', number.eliminated);
+    number.element.style.display = boardFlip || target?.side !== number.side || projected.z > 1 || projected.z < -1 || !damageNumberVisible(map, local.side ?? 'front', number.side, [camera.position.x, camera.position.y, camera.position.z], head) ? 'none' : '';
     number.element.style.transform = `translate(${(projected.x + 1) * innerWidth / 2}px,${(1 - projected.y) * innerHeight / 2}px)`;
     number.element.style.opacity = String(1 - age);
   }

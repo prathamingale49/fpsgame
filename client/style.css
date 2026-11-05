@@ -97,4 +97,7 @@ input::placeholder{color:#9b9d98}
 .feed-streak-badge{position:absolute;right:-15px;top:-9px;transform:rotate(18deg);color:#ffd24a;font:800 20px/1 'Barlow Condensed',sans-serif;text-shadow:0 1px 2px #000;pointer-events:none}
 #crosshair.sniper-ads{width:28px;height:28px;border:1px solid #6ffaff;border-radius:50%;box-shadow:0 0 9px #28dcff}
 #crosshair.sniper-ads i{display:none}
+.floating-damage{position:fixed;left:0;top:0;color:#ffd24a;font:bold 22px monospace;pointer-events:none;z-index:4;text-shadow:0 2px 4px #000;margin-left:-12px}
+.floating-damage.elimination-damage{font-size:32px;color:#ffe89a;text-shadow:0 0 8px #e0a500,0 2px 4px #000}
+#hitmarker.confirmed-kill{color:#fff0b0;font-size:52px;text-shadow:0 0 18px #ffd24a}
 #crosshair.sniper-ads:after{content:'';position:absolute;left:50%;top:50%;width:3px;height:3px;background:#bcffff;transform:translate(-50%,-50%)}
