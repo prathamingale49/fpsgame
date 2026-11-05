@@ -24,7 +24,10 @@ Final production build and real BMS Chrome weapon checks also pass: iron full
 charge/focus-loss cancel, Pump ammo, hot-air overheat/cooling, Blaster automatic
 fire, and public solder-only selection. Screenshots under ignored artifacts/
 were visually inspected. Local dev server verified with practice Pump selection
-and six-round magazine. Remaining: publish branch/open PR; do not merge.
+and six-round magazine. Published PR #8:
+https://github.com/prathamingale49/fpsgame/pull/8 (open, unmerged).
+Implementation checkpoint: `37b133f`; latest documentation checkpoint is
+`git log -1`. No required work remains; await review and do not merge.
 
 Approximation: hot air samples the target's eye-height center with its hit-radius
 angular allowance and center LOS. Fine partial exposure around obstacles is
