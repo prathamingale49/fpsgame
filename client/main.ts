@@ -15,7 +15,6 @@ for (const brand of Array.from(document.querySelectorAll('.brand, .menu-card h1'
 const practiceButton = document.createElement('button'); practiceButton.id = 'practice'; practiceButton.textContent = 'SOLO PRACTICE';
 el('create').parentElement!.after(practiceButton);
 practiceButton.style.cssText = 'width:100%;margin-top:8px;padding:15px;background:#323332;color:#e0a500;border:1px solid #e0a500;font-weight:700;cursor:pointer';
-const pickupButton = practiceButton.cloneNode(true) as HTMLButtonElement; pickupButton.id = 'pickup-practice'; pickupButton.textContent = 'PICKUP PRACTICE'; practiceButton.after(pickupButton);
 const pickupPrompt = document.createElement('div'); pickupPrompt.id = 'pickup-prompt'; pickupPrompt.style.cssText = 'position:absolute;bottom:190px;width:100%;text-align:center;font:13px monospace;color:#ffcf4a;pointer-events:none'; el('hud').append(pickupPrompt);
 const weaponPickupModels = new Map<string, THREE.Group>();
 let nearbyWeapon: { id: string; version: number } | null = null, visualFireAt = 0;
@@ -31,7 +30,7 @@ weaponMeter.style.cssText = 'position:absolute;right:28px;bottom:125px;width:200
 let specialHeld = false, fullChargeCue = false;
 const currentWeapon = () => WEAPONS[(room?.state.players?.get(room.sessionId)?.weapon ?? 'solder') as WeaponId];
 const weaponShot = (): ShotInput => ({ shotId: ++nextShotId, seq, yaw, pitch, viewTime: lastViewTime || undefined });
-function cancelSpecial() { specialHeld = false; fullChargeCue = false; if (room?.state.practice) room.send('weapon:trigger', { action: 'cancel' }); }
+function cancelSpecial() { specialHeld = false; fullChargeCue = false; if (room) room.send('weapon:trigger', { action: 'cancel' }); }
 const canvas = el<HTMLCanvasElement>('game');
 const renderer = new THREE.WebGLRenderer({ canvas, antialias: true, powerPreference: 'high-performance' });
 let quality = localStorage.getItem('pcb-quality') || 'balanced';
@@ -413,7 +412,7 @@ function syncState(state: MatchState) {
 
 const endpoint = `${location.protocol === 'https:' ? 'wss' : 'ws'}://${location.hostname}:${import.meta.env.DEV ? '2567' : location.port || (location.protocol === 'https:' ? '443' : '80')}`;
 const client = new Client(endpoint);
-async function connect(mode: 'play' | 'create' | 'join' | 'reconnect' | 'practice' | 'pickup-practice') {
+async function connect(mode: 'play' | 'create' | 'join' | 'reconnect' | 'practice') {
   el('error').textContent = '';
   const name = (el<HTMLInputElement>('name').value || 'Engineer').trim().slice(0, 18);
   const code = el<HTMLInputElement>('code').value.trim().toUpperCase();
@@ -424,7 +423,7 @@ async function connect(mode: 'play' | 'create' | 'join' | 'reconnect' | 'practic
     devScaleEnabled = health.devScaleEnabled === true;
     const token = sessionStorage.getItem('pcb-reconnection-token');
     const options = { name, protocol: MOVEMENT_PROTOCOL };
-    room = mode === 'pickup-practice' ? await client.create<MatchState>('practice-pickups', options) : mode === 'practice' ? await client.create<MatchState>('practice', options) : mode === 'reconnect' && token ? await client.reconnect<MatchState>(token) : mode === 'join' ? await client.joinById<MatchState>(code, options) : mode === 'create' ? await client.create<MatchState>('pcb', options) : await client.joinOrCreate<MatchState>('pcb', options);
+    room = mode === 'practice' ? await client.create<MatchState>('practice', options) : mode === 'reconnect' && token ? await client.reconnect<MatchState>(token) : mode === 'join' ? await client.joinById<MatchState>(code, options) : mode === 'create' ? await client.create<MatchState>('pcb', options) : await client.joinOrCreate<MatchState>('pcb', options);
     const me = room.state?.players?.get(room.sessionId);
     pending = []; lastSentInput = null; nextInputAt = performance.now(); seq = me?.ack ?? 0; yaw = me?.yaw ?? 0; pitch = me?.pitch ?? 0;
     const response = await fetch('/api/map');
@@ -473,7 +472,6 @@ async function connect(mode: 'play' | 'create' | 'join' | 'reconnect' | 'practic
 }
 el('play').onclick = () => connect('play'); el('create').onclick = () => connect('create'); el('join').onclick = () => connect('join');
 practiceButton.onclick = () => connect('practice');
-pickupButton.onclick = () => connect('pickup-practice');
 document.addEventListener('keydown', e => {
   if (!room?.state.practice || e.repeat) return;
   if (e.code === 'F5') { e.preventDefault(); showNpcHitboxes = !showNpcHitboxes; showFeed(`NPC HITBOXES ${showNpcHitboxes ? 'ON' : 'OFF'}`); }
@@ -507,17 +505,17 @@ window.addEventListener('blur', cancelSpecial);
 document.addEventListener('visibilitychange', () => { if (document.hidden) { mouseDown = false; cancelSpecial(); } });
 document.addEventListener('pointerlockchange', () => { if (document.pointerLockElement !== canvas) cancelSpecial(); });
 document.addEventListener('keydown', e => {
-  if (!room?.state.practice || e.repeat) return;
+  if (!room || e.repeat) return;
   const slot = ['Digit1', 'Digit2', 'Digit3', 'Digit4'].indexOf(e.code);
-  if (slot >= 0 && !room.state.pickupPractice) { e.preventDefault(); mouseDown = false; cancelSpecial(); room.send('weapon:select', WEAPON_IDS[slot]); }
-  if (room.state.pickupPractice && e.code === 'KeyQ') { e.preventDefault(); mouseDown = false; cancelSpecial(); room.send('weapon:swap'); }
-  if (room.state.pickupPractice && e.code === 'KeyE' && nearbyWeapon) { e.preventDefault(); mouseDown = false; cancelSpecial(); room.send('weapon:collect', nearbyWeapon); }
+  if (slot >= 0 && room.state.practice) { e.preventDefault(); mouseDown = false; cancelSpecial(); room.send('weapon:select', WEAPON_IDS[slot]); }
+  if (!room.state.practice && e.code === 'KeyQ') { e.preventDefault(); mouseDown = false; cancelSpecial(); room.send('weapon:swap'); }
+  if (!room.state.practice && e.code === 'KeyE' && nearbyWeapon) { e.preventDefault(); mouseDown = false; cancelSpecial(); room.send('weapon:collect', nearbyWeapon); }
   if (e.code === 'KeyR') { mouseDown = false; cancelSpecial(); }
 });
 // Hold leases and aim updates are independent of rendering FPS.
 setInterval(() => {
   const p = room?.state.players?.get(room.sessionId);
-  if (!room?.state.practice || !p?.alive || p.reloading || p.transitionCooldown > 0 || document.pointerLockElement !== canvas || !mouseDown) { if (specialHeld) cancelSpecial(); return; }
+  if (!room || !p?.alive || p.reloading || p.transitionCooldown > 0 || document.pointerLockElement !== canvas || !mouseDown) { if (specialHeld) cancelSpecial(); return; }
   if (p.weapon !== 'iron' && p.weapon !== 'air') return;
   room.send('weapon:trigger', { action: p.triggerHeld ? 'aim' : 'start', shot: weaponShot() }); specialHeld = true;
 }, 100);
@@ -635,9 +633,11 @@ function frame(now: number) {
     entry.healthBar.quaternion.copy(camera.quaternion);
   }
   for (const [id, helper] of npcHitboxes) if (!room?.state.practice || !remotes.has(id)) { scene.remove(helper); helper.dispose(); npcHitboxes.delete(id); }
-  if (room?.state.practice) {
-    el('timer').textContent = 'PRACTICE';
-    el('player-count').textContent = `5 NPC TARGETS · F5 HITBOXES · F6 ${room.state.npcMovement ? 'FREEZE' : 'RESUME'}`;
+  if (room?.state.players?.get(room.sessionId)) {
+    if (room.state.practice) {
+      el('timer').textContent = 'PRACTICE';
+      el('player-count').textContent = `5 NPC TARGETS · F5 HITBOXES · F6 ${room.state.npcMovement ? 'FREEZE' : 'RESUME'}`;
+    }
     const p = room.state.players.get(room.sessionId)!;
     const config = currentWeapon();
     airCone.visible = p.weapon === 'air' && specialHeld && p.triggerHeld && !p.overheated && !boardFlip;
@@ -655,8 +655,8 @@ function frame(now: number) {
     weaponStatus.style.whiteSpace = 'pre-line';
     const viewScale = .75 * playerTuning.height / 1.8;
     gunView.scale.setScalar(viewScale);
-    if (room.state.pickupPractice) weaponStatus.textContent = `PICKUP PRACTICE · Q SWAP · E COLLECT\nPRIMARY: BLASTER · SPECIAL: ${p.specialWeapon ? WEAPONS[p.specialWeapon as WeaponId].name.toUpperCase() : 'NONE'}\n${p.reloading ? 'RELOADING' : config.id === 'iron' ? `CHARGE ${Math.round(charge * 100)}%` : config.id === 'air' && p.overheated ? 'OVERHEATED' : ''}`;
-    for (const [id, entry] of remotes) {
+    if (!room.state.practice) weaponStatus.textContent = `Q SWAP · E COLLECT\nPRIMARY: BLASTER · SPECIAL: ${p.specialWeapon ? WEAPONS[p.specialWeapon as WeaponId].name.toUpperCase() : 'NONE'}\n${p.reloading ? 'RELOADING' : config.id === 'iron' ? `CHARGE ${Math.round(charge * 100)}%` : config.id === 'air' && p.overheated ? 'OVERHEATED' : ''}`;
+    if (room.state.practice) for (const [id, entry] of remotes) {
       if (!room.state.players.get(id)?.npc) continue;
       let helper = npcHitboxes.get(id);
       if (!helper) { helper = new THREE.Box3Helper(new THREE.Box3(), 0x00ffff); scene.add(helper); npcHitboxes.set(id, helper); }
@@ -665,7 +665,6 @@ function frame(now: number) {
       helper.visible = showNpcHitboxes && entry.mesh.visible;
     }
   }
-  if (!room?.state.practice) { airCone.visible = false; weaponMeter.hidden = true; weaponStatus.textContent = ''; gunView.scale.setScalar(.75 * playerTuning.height / 1.8); el('bottom-hud').querySelector('.ammo small')!.textContent = 'SOLDER BLASTER · SOLDER'; }
   const me = room?.state.players?.get(room.sessionId), equipped = currentWeapon().id;
   const animationCharge = me?.chargeStarted ? Math.min(1, Math.max(0, ((Date.now() - (Number.isFinite(serverClockOffsetMs) ? serverClockOffsetMs : 0)) / 1000 - me.chargeStarted) / CHARGE.full)) : 0;
   for (const [id, model] of weaponModels) animateWeapon(model, { dt, active: id === equipped && !!me?.alive, enabled: !!me?.alive && document.pointerLockElement === canvas && !boardFlip, charge: animationCharge, heat: me?.heat ?? 0, overheated: me?.overheated ?? false, firing: me?.triggerHeld ?? false, reloading: me?.reloading ?? false, moving: keys.has('KeyW') || keys.has('KeyS') || keys.has('KeyA') || keys.has('KeyD'), fireAt: id === visualFireWeapon ? visualFireAt : 0 });
