@@ -95,3 +95,6 @@ input::placeholder{color:#9b9d98}
 
 #kill-feed .feed-streak{position:relative}
 .feed-streak-badge{position:absolute;right:-15px;top:-9px;transform:rotate(18deg);color:#ffd24a;font:800 20px/1 'Barlow Condensed',sans-serif;text-shadow:0 1px 2px #000;pointer-events:none}
+#crosshair.sniper-ads{width:28px;height:28px;border:1px solid #6ffaff;border-radius:50%;box-shadow:0 0 9px #28dcff}
+#crosshair.sniper-ads i{display:none}
+#crosshair.sniper-ads:after{content:'';position:absolute;left:50%;top:50%;width:3px;height:3px;background:#bcffff;transform:translate(-50%,-50%)}

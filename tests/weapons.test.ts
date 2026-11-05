@@ -1,14 +1,23 @@
 import { expect, it } from 'vitest';
-import { WEAPONS, ironDamage, airDamage, pumpRays, weaponHits, validWeaponId } from '../shared/weapons.js';
+import { WEAPONS, ironDamage, sniperAim, airDamage, pumpRays, weaponHits, validWeaponId } from '../shared/weapons.js';
 import { PLAYER, aimRay, initialMotion, testMap } from '../shared/game.js';
 
 const map = { ...testMap, boxes: [] };
 const ray = aimRay(0, 0, 0, 0, 0);
 const target = (x: number, z: number) => initialMotion([x, 0, z]);
+it('keeps scoped sniper aim exact and bounds server-generated hip spread', () => {
+  expect(sniperAim(.2, -.1, true)).toEqual([.2, -.1]);
+  for (let i = 0; i < 100; i++) {
+    const [yaw, pitch] = sniperAim(.2, -.1, false);
+    expect(Math.hypot(yaw - .2, pitch + .1)).toBeLessThanOrEqual(.03500001);
+  }
+  expect(sniperAim(0, 0, false, () => .5)).not.toEqual([0, 0]);
+  expect(weaponHits('sniper', ray, [ray], map, [['npc', target(0, -140)]], 'me', PLAYER, 'front', 100).hits.get('npc')).toBe(100);
+});
 it('uses server charge thresholds and bounded damage', () => {
-  expect(ironDamage(0)).toBe(0); expect(ironDamage(.149)).toBe(0);
-  expect(ironDamage(.15)).toBe(40); expect(ironDamage(.575)).toBe(70);
-  expect(ironDamage(1)).toBe(100); expect(ironDamage(100)).toBe(100);
+  expect(ironDamage(0)).toBe(25); expect(ironDamage(-1)).toBe(25);
+  expect(ironDamage(.5)).toBe(57.5);
+  expect(ironDamage(1)).toBe(90); expect(ironDamage(100)).toBe(90);
 });
 it('defines unchanged solder balance and validates weapon IDs', () => {
   expect(WEAPONS.solder).toMatchObject({ damage: 25, magazine: 30, fireInterval: .1, reloadSeconds: 1.7, range: 130 });

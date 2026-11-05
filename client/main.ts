@@ -493,8 +493,18 @@ if (sessionStorage.getItem('pcb-reconnection-token')) void connect('reconnect');
 document.addEventListener('keydown', e => { keys.add(e.code); if (e.code === 'F3') { e.preventDefault(); showDebug = !showDebug; debug.hidden = !showDebug; fpsFrames = 0; fpsStart = performance.now(); } if (e.code === 'F4' && devScaleEnabled && room && !e.repeat) { e.preventDefault(); scalePanel.hidden = !scalePanel.hidden; if (!scalePanel.hidden && document.pointerLockElement === canvas) document.exitPointerLock(); } if (e.code === 'Tab') { e.preventDefault(); el('scoreboard').classList.remove('hidden'); } if (e.code === 'KeyR' && room && !e.repeat) room.send('reload'); });
 document.addEventListener('keyup', e => { keys.delete(e.code); if (e.code === 'Tab') el('scoreboard').classList.add('hidden'); });
 document.addEventListener('mousemove', e => { if (document.pointerLockElement !== canvas) return; yaw -= e.movementX * sensitivity; pitch = Math.max(-1.4, Math.min(1.4, pitch - e.movementY * sensitivity)); });
-canvas.addEventListener('mousedown', e => { if (e.button === 0) { if (document.pointerLockElement !== canvas) canvas.requestPointerLock(); mouseDown = true; } });
-document.addEventListener('mouseup', () => {
+let adsHeld = false, adsZoom = 0, adsSent = false;
+canvas.addEventListener('contextmenu', e => e.preventDefault());
+canvas.addEventListener('mousedown', e => { if (e.button === 2 && currentWeapon().id === 'sniper' && document.pointerLockElement === canvas) { adsHeld = true; room?.send('weapon:ads', true); adsSent = true; } if (e.button === 0) { if (document.pointerLockElement !== canvas) canvas.requestPointerLock(); mouseDown = true; } });
+canvas.addEventListener('mousedown', e => {
+  if (e.button !== 0 || currentWeapon().id !== 'sniper') return;
+  mouseDown = false;
+  const p = room?.state.players?.get(room.sessionId);
+  if (!p?.alive || p.reloading || !p.ammo || p.transitionCooldown > 0 || boardFlip || document.pointerLockElement !== canvas) return;
+  room!.send('shoot', weaponShot());
+});
+document.addEventListener('mouseup', e => {
+  if (e.button === 2) { adsHeld = false; return; }
   mouseDown = false;
   if (specialHeld && currentWeapon().id === 'iron') { room?.send('weapon:trigger', { action: 'release', shot: weaponShot() }); specialHeld = false; fullChargeCue = false; gunView.position.z = -.15; sound(130, .12); }
   else cancelSpecial();
@@ -506,7 +516,7 @@ document.addEventListener('visibilitychange', () => { if (document.hidden) { mou
 document.addEventListener('pointerlockchange', () => { if (document.pointerLockElement !== canvas) cancelSpecial(); });
 document.addEventListener('keydown', e => {
   if (!room || e.repeat) return;
-  const slot = ['Digit1', 'Digit2', 'Digit3', 'Digit4'].indexOf(e.code);
+  const slot = ['Digit1', 'Digit2', 'Digit3', 'Digit4', 'Digit5'].indexOf(e.code);
   if (slot >= 0 && room.state.practice) { e.preventDefault(); mouseDown = false; cancelSpecial(); room.send('weapon:select', WEAPON_IDS[slot]); }
   if (!room.state.practice && e.code === 'KeyQ') { e.preventDefault(); mouseDown = false; cancelSpecial(); room.send('weapon:swap'); }
   if (!room.state.practice && e.code === 'KeyE' && nearbyWeapon) { e.preventDefault(); mouseDown = false; cancelSpecial(); room.send('weapon:collect', nearbyWeapon); }
@@ -562,7 +572,7 @@ function frame(now: number) {
     if (mouseDown && config.mode !== 'charge' && config.mode !== 'heat' && document.pointerLockElement === canvas && me?.alive && !me.reloading && (Date.now() - (Number.isFinite(serverClockOffsetMs) ? serverClockOffsetMs : 0)) / 1000 >= me.weaponReadyAt && (local.transitionCooldown ?? 0) === 0 && !boardFlip && me.ammo > 0 && now - lastShot >= config.fireInterval * 1000) {
       const shotId = ++nextShotId;
       const shot: ShotInput = { shotId, seq, yaw, pitch, viewTime: lastViewTime || undefined };
-      room.send('shoot', shot); lastShot = now; gunView.position.z = config.id === 'pump' ? -.2 : -.09; gunView.rotation.x = config.id === 'pump' ? .25 : .09; muzzle.visible = true; sound(config.id === 'pump' ? 100 : 235, .07);
+      room.send('shoot', shot); if (config.id === 'sniper') mouseDown = false; lastShot = now; gunView.position.z = config.id === 'pump' ? -.2 : -.09; gunView.rotation.x = config.id === 'pump' ? .25 : .09; muzzle.visible = true; sound(config.id === 'pump' ? 100 : 235, .07);
       const ray = aimRay(local.x, local.y, local.z, movementYaw(yaw, local), pitch, playerTuning);
       // Immediate full-length preview, without invented impact sparks. The
       // authoritative response reuses and corrects this same tracer.
@@ -645,7 +655,8 @@ function frame(now: number) {
     const charge = p.chargeStarted ? Math.min(1, Math.max(0, ((Date.now() - (Number.isFinite(serverClockOffsetMs) ? serverClockOffsetMs : 0)) / 1000 - p.chargeStarted) / CHARGE.full)) : 0;
     if (specialHeld && charge >= 1 && !fullChargeCue) { fullChargeCue = true; sound(1100, .18, 'sine'); }
     if (!charge) fullChargeCue = false;
-    weaponMeter.hidden = p.weapon !== 'iron' && p.weapon !== 'air'; weaponMeter.value = p.weapon === 'iron' ? charge : p.heat;
+    const recharge = p.sniperReloadAt ? Math.max(0, Math.min(1, 1 - (p.sniperReloadAt - (Date.now() - (Number.isFinite(serverClockOffsetMs) ? serverClockOffsetMs : 0)) / 1000) / 2.5)) : 1;
+    weaponMeter.hidden = p.weapon !== 'iron' && p.weapon !== 'air' && p.weapon !== 'sniper'; weaponMeter.value = p.weapon === 'sniper' ? recharge : p.weapon === 'iron' ? charge : p.heat;
     weaponMeter.style.accentColor = p.overheated && p.weapon === 'air' ? '#ff544a' : charge >= 1 ? '#88dfff' : '#ffd24a';
     el('bottom-hud').querySelector('.ammo small')!.textContent = config.name.toUpperCase();
     el('ammo').textContent = config.id === 'air' ? `${Math.round(p.heat * 100)}%` : String(p.ammo);
@@ -653,9 +664,11 @@ function frame(now: number) {
     el('ammo-bar').style.width = `${100 * (config.id === 'air' ? p.heat : p.ammo / config.magazine)}%`;
     weaponStatus.textContent = `SANDBOX · 1 BLASTER · 2 IRON · 3 HOT AIR · 4 PUMP\n${p.reloading ? 'RELOADING' : p.overheated && p.weapon === 'air' ? 'OVERHEATED — COOLING' : p.weapon === 'iron' ? `CHARGE ${Math.round(charge * 100)}% ${charge >= 1 ? 'READY' : '(hold / release)'}` : p.weapon === 'air' ? `HEAT ${Math.round(p.heat * 100)}%` : ''}`;
     weaponStatus.style.whiteSpace = 'pre-line';
+    if (room.state.practice) weaponStatus.textContent += '\n5 CAPACITOR SNIPER';
     const viewScale = .75 * playerTuning.height / 1.8;
     gunView.scale.setScalar(viewScale);
     if (!room.state.practice) weaponStatus.textContent = `Q SWAP · E COLLECT\nPRIMARY: BLASTER · SPECIAL: ${p.specialWeapon ? WEAPONS[p.specialWeapon as WeaponId].name.toUpperCase() : 'NONE'}\n${p.reloading ? 'RELOADING' : config.id === 'iron' ? `CHARGE ${Math.round(charge * 100)}%` : config.id === 'air' && p.overheated ? 'OVERHEATED' : ''}`;
+    if (p.weapon === 'sniper') weaponStatus.textContent += `\n${p.reloading ? `RECHARGING ${Math.round(recharge * 100)}%` : 'READY · RIGHT CLICK ADS'} · ${p.ammo}/1`;
     if (room.state.practice) for (const [id, entry] of remotes) {
       if (!room.state.players.get(id)?.npc) continue;
       let helper = npcHitboxes.get(id);
@@ -666,8 +679,24 @@ function frame(now: number) {
     }
   }
   const me = room?.state.players?.get(room.sessionId), equipped = currentWeapon().id;
+  if (!me?.alive || me.reloading || equipped !== 'sniper' || document.pointerLockElement !== canvas || boardFlip) adsHeld = false;
+  if (adsHeld !== adsSent && room) { room.send('weapon:ads', adsHeld); adsSent = adsHeld; }
+  adsZoom = adsHeld ? Math.min(1, adsZoom + dt / .15) : Math.max(0, adsZoom - dt / .15);
+  camera.fov = 2 * Math.atan(Math.tan(78 * Math.PI / 360) / (1 + .75 * adsZoom)) * 180 / Math.PI;
+  camera.updateProjectionMatrix();
+  el('crosshair').classList.toggle('sniper-ads', adsHeld);
   const animationCharge = me?.chargeStarted ? Math.min(1, Math.max(0, ((Date.now() - (Number.isFinite(serverClockOffsetMs) ? serverClockOffsetMs : 0)) / 1000 - me.chargeStarted) / CHARGE.full)) : 0;
   for (const [id, model] of weaponModels) animateWeapon(model, { dt, active: id === equipped && !!me?.alive, enabled: !!me?.alive && document.pointerLockElement === canvas && !boardFlip, charge: animationCharge, heat: me?.heat ?? 0, overheated: me?.overheated ?? false, firing: me?.triggerHeld ?? false, reloading: me?.reloading ?? false, moving: keys.has('KeyW') || keys.has('KeyS') || keys.has('KeyA') || keys.has('KeyD'), fireAt: id === visualFireWeapon ? visualFireAt : 0 });
+  const sniperModel = weaponModels.get('sniper')!;
+  if (equipped === 'sniper') {
+    const progress = me?.sniperReloadAt ? Math.max(0, Math.min(1, 1 - (me.sniperReloadAt - (Date.now() - (Number.isFinite(serverClockOffsetMs) ? serverClockOffsetMs : 0)) / 1000) / 2.5)) : 1;
+    sniperModel.chamber.emissiveIntensity = .05 + progress * 3;
+    for (const coil of sniperModel.coils) coil.material.emissiveIntensity = .05 + progress * Math.sin(now * .025) ** 8 * 3 + sniperModel.kick * 8;
+    sniperModel.flash.scale.set(1, 1, 4);
+    sniperModel.plunger.scale.y = Math.max(.01, progress);
+    sniperModel.root.position.x -= adsZoom * .12;
+    sniperModel.root.position.y += adsZoom * .08;
+  }
   nearbyWeapon = null; pickupPrompt.textContent = '';
   const presentWeaponPickups = new Set<string>(); let nearest: number = WEAPON_PICKUPS.radius;
   room?.state.weaponPickups?.forEach((pickup, id) => {

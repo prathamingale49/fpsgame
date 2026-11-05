@@ -48,6 +48,23 @@ export function createWeaponModel(id: WeaponId): WeaponModel {
     const rim = mesh(ring(.145), materials.metal, -.22, .06, .04); rim.rotation.y = Math.PI / 2;
     for (let i = 0; i < 5; i++) { const blade = mesh(box(.04, .27, .02), materials.gold, 0, 0, 0, fan); blade.rotation.z = i * Math.PI / 5; }
     tube(.055, .06, -.28, materials.copper);
+  } else if (id === 'sniper') {
+    root.scale.setScalar(.6);
+    // Broad PCB receiver and oversized electrolytic can distinguish this from the thin iron.
+    mesh(box(.4, .12, .8), materials.body, 0, -.1, 0);
+    mesh(box(.38, .025, .72), materials.copper, 0, -.025, 0);
+    const cap = mesh(cylinder(.22, .55), materials.black, .16, .26, .12); cap.name = 'electrolytic-capacitor';
+    chamber.color.set('#64f4ff'); chamber.emissive.set('#28dcff');
+    for (const z of [-.1, .32]) mesh(box(.46, .045, .045), materials.metal, .1, .3, z);
+    tube(.075, 1.2, -.65, materials.copper, barrel);
+    tube(.09, .12, -1.28, chamber, barrel);
+    for (let i = 0; i < 3; i++) coils.push(mesh(ring(.08), glow('#36efff'), 0, 0, -.6 - i * .22, barrel) as WeaponModel['coils'][number]);
+    mesh(box(.05, .45, .04), chamber, -.2, .15, .15, plunger);
+    for (let i = 0; i < 4; i++) mesh(box(.03, .025, .5), materials.gold, -.12 + i * .08, -.005, -.1);
+    mesh(box(.12, .32, .18), materials.black, 0, -.29, .15);
+    const sight = mesh(ring(.10), materials.metal, 0, .2, -.3); sight.name = 'holographic-sight';
+    mesh(box(.012, .09, .012), chamber, 0, .2, -.3);
+    mesh(box(.09, .012, .012), chamber, 0, .2, -.3);
   } else {
     tube(.17, .7, 0, materials.gold); tube(.11, .22, -.46, materials.black, barrel);
     tube(.055, .16, -.64, materials.metal, barrel);
@@ -58,6 +75,7 @@ export function createWeaponModel(id: WeaponId): WeaponModel {
   }
   const flash = mesh(cached('flash', () => new THREE.IcosahedronGeometry(.12, 0)), new THREE.MeshBasicMaterial({ color: id === 'iron' ? '#c4a4ff' : '#fff0a0', transparent: true, opacity: .9 }), 0, 0, id === 'iron' ? -1.34 : -.72);
   flash.visible = false;
+  if (id === 'sniper') { flash.position.z = -1.4; (flash.material as THREE.MeshBasicMaterial).color.set('#bcffff'); flash.scale.set(1, 1, 3); }
   return { id, root, barrel, coils, chamber, fan, plunger, flash, kick: 0, time: 0, lastFire: 0, activeLast: false, equip: 1, reload: 0 };
 }
 export type WeaponAnimation = { dt: number; active: boolean; enabled: boolean; charge: number; heat: number; overheated: boolean; firing: boolean; reloading: boolean; moving: boolean; fireAt: number };
@@ -79,7 +97,7 @@ export function animateWeapon(model: WeaponModel, input: WeaponAnimation) {
   root.position.z = THREE.MathUtils.damp(root.position.z, tension + model.kick * .16, charge > 0 ? 12 : 35, dt);
   root.position.y = sway - model.reload * .2 - model.equip * .25;
   root.position.x = charge > .85 ? Math.sin(model.time * 95) * .004 * charge : 0;
-  root.rotation.x = model.kick * (model.id === 'pump' ? .2 : .06) - model.reload * .5 - model.equip * .45;
+  root.rotation.x = model.kick * (model.id === 'sniper' ? .25 : model.id === 'pump' ? .2 : .06) - model.reload * .5 - model.equip * .45;
   root.rotation.z = sway * .3;
   barrel.position.z = model.id === 'iron' ? charge * .16 : 0;
   plunger.position.z = model.id === 'pump' ? -model.kick * .32 : 0;

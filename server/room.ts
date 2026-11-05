@@ -1,7 +1,7 @@
 import { KillChain } from './kill-chain.js';
 import { Room, type Client } from 'colyseus';
 import { MatchState, PlayerState, PickupState, WeaponPickupState } from './state.js';
-import { WEAPONS, validWeaponId, ironDamage, pumpRays, weaponHits, weaponKillMessage, HEAT, type WeaponId } from '../shared/weapons.js';
+import { WEAPONS, validWeaponId, ironDamage, sniperAim, pumpRays, weaponHits, weaponKillMessage, HEAT, type WeaponId } from '../shared/weapons.js';
 import { weaponPickupLocations, canCollectWeapon, WEAPON_PICKUPS } from '../shared/weapon-pickups.js';
 import { aimRay, movementYaw, collisionCacheStats, hitscan, initialMotion, samplePosition, stepMotion, testMap, TICK, MOVEMENT_PROTOCOL, MATCH_SECONDS, RESPAWN_SECONDS, PLAYER, WEAPON, COMBAT, tuningForHeight, validDevHeight, validInput, validShotInput, type Input, type ShotInput, type PositionSample, type MapData, type Motion, type PlayerTuning, type BoardSide } from '../shared/game.js';
 const PLAYER_PICKUP_DISTANCE = .9;
@@ -44,7 +44,7 @@ export class GameRoom extends Room {
   onCreate() {
     this.state.practice = this.practice;
 
-    if (!this.practice) weaponPickupLocations(activeMap, Math.floor(Math.random() * 0xffffffff)).forEach((point, index) => this.state.weaponPickups.set(String(index), new WeaponPickupState({ ...point, weapon: (['iron', 'air', 'pump'] as const)[index % 3] })));
+    if (!this.practice) weaponPickupLocations(activeMap, Math.floor(Math.random() * 0xffffffff)).forEach((point, index) => this.state.weaponPickups.set(String(index), new WeaponPickupState({ ...point, weapon: index >= 9 ? 'sniper' : (['iron', 'air', 'pump'] as const)[index % 3] })));
     if (this.practice) { this.maxClients = 1; void this.setPrivate(true); }
     this.onMessage('practice:movement', () => { if (this.practice) this.state.npcMovement = !this.state.npcMovement; });
     this.roomId = Math.random().toString(36).slice(2, 8).toUpperCase();
@@ -88,6 +88,7 @@ export class GameRoom extends Room {
       const pickup = this.state.weaponPickups.get(request.id);
       if (!pickup || pickup.version !== request.version || !canCollectWeapon(p, pickup, activeMap) || p.specialWeapon === pickup.weapon) return;
       const old = p.specialWeapon;
+      p.sniperReloadAt = 0;
       if (p.weapon !== 'solder') this.equipWeapon(client.sessionId, 'solder');
       if (old) this.weaponControl(client.sessionId).stocks.delete(old as WeaponId);
       p.specialWeapon = pickup.weapon;
@@ -110,10 +111,15 @@ export class GameRoom extends Room {
         if (p.weapon === 'iron') p.chargeStarted = now;
       } else if (action === 'aim' && c.held) { c.lease = now; c.shot = shot; }
       else if (action === 'release') {
+        if (!c.held || p.chargeStarted <= 0 || now - c.lease > HEAT.lease) { this.cancelWeapon(client.sessionId); return; }
         const duration = p.chargeStarted > 0 && c.held && now - c.lease <= HEAT.lease ? now - p.chargeStarted : 0;
         this.cancelWeapon(client.sessionId);
         if (p.weapon === 'iron' && ironDamage(duration) > 0) this.fire(client.sessionId, shot, duration);
       }
+    });
+    this.onMessage('weapon:ads', (client, value: unknown) => {
+      const p = this.state.players.get(client.sessionId);
+      if (p) p.ads = value === true && p.alive && p.connected && p.weapon === 'sniper' && !p.reloading && p.transitionCooldown <= 0;
     });
     this.onMessage('reload', (client) => this.reload(client.sessionId));
     this.onMessage('dev:scale', (client, payload: unknown) => {
@@ -226,7 +232,12 @@ export class GameRoom extends Room {
         }
       }
       if (!p.alive) { if (now >= r.respawnAt && this.state.phase !== 'ended') this.respawn(id); return; }
-      if (p.reloading && now >= r.reloadAt) {
+      if (p.sniperReloadAt > 0 && now >= p.sniperReloadAt) {
+        p.sniperReloadAt = 0;
+        if (p.weapon === 'sniper') { p.ammo = 1; p.reserve = 1; p.reloading = false; }
+        else this.weaponControl(id).stocks.set('sniper', { ammo: 1, reserve: 1 });
+      }
+      if (p.reloading && p.weapon !== 'sniper' && now >= r.reloadAt) {
         const count = Math.min(WEAPONS[p.weapon as WeaponId].magazine - p.ammo, p.reserve);
         p.ammo += count; p.reserve -= count; p.reloading = false;
       }
@@ -276,13 +287,14 @@ export class GameRoom extends Room {
     const p = this.state.players.get(id), r = this.runtime.get(id);
     this.cancelWeapon(id);
     if (!p || !r || !p.alive || p.reloading || p.weapon === 'air' || p.ammo === WEAPONS[p.weapon as WeaponId].magazine || p.reserve === 0) return;
-    p.reloading = true; r.reloadAt = Date.now() / 1000 + WEAPONS[p.weapon as WeaponId].reloadSeconds;
+    p.reloading = true; p.ads = false; r.reloadAt = Date.now() / 1000 + WEAPONS[p.weapon as WeaponId].reloadSeconds;
+    if (p.weapon === 'sniper' && !p.sniperReloadAt) p.sniperReloadAt = r.reloadAt;
   }
 
   private fall(id: string, now: number) {
     const p = this.state.players.get(id), r = this.runtime.get(id);
     if (!p || !r || !p.alive) return;
-    p.hp = 0; p.alive = false; p.deaths++; p.reloading = false; p.mantleTarget = 0;
+    p.hp = 0; p.alive = false; p.deaths++; p.reloading = false; p.mantleTarget = 0; p.ads = false; p.sniperReloadAt = 0;
     this.cancelWeapon(id);
     r.respawnAt = now + RESPAWN_SECONDS;
     this.hitHistory.delete(id);
@@ -320,7 +332,9 @@ export class GameRoom extends Room {
     r.lastShot = now; p.weaponReadyAt = now + config.fireInterval;
     if (p.weapon === 'air') { p.heat = Math.min(1, p.heat + HEAT.pulse / HEAT.duration); if (p.heat >= .999) p.overheated = true; }
     else p.ammo--;
-    const ray = aimRay(p.x, p.y, p.z, movementYaw(shot?.yaw ?? p.yaw, p as unknown as Motion), shot?.pitch ?? p.pitch, this.playerTuning);
+    const baseYaw = movementYaw(shot?.yaw ?? p.yaw, p as unknown as Motion), basePitch = shot?.pitch ?? p.pitch;
+    const [shotYaw, shotPitch] = p.weapon === 'sniper' ? sniperAim(baseYaw, basePitch, p.ads) : [baseYaw, basePitch];
+    const ray = aimRay(p.x, p.y, p.z, shotYaw, shotPitch, this.playerTuning);
     const viewTime = shot?.viewTime === undefined ? nowMs : Math.min(nowMs, Math.max(nowMs - COMBAT.maxRewindMs, shot.viewTime));
     const opponents = [...this.state.players.entries()].filter(([otherId, other]) => otherId !== id && other.alive && other.connected && other.side === p.side).map(([otherId, other]) => {
       const historical = p.weapon === 'air' ? undefined : samplePosition(this.hitHistory.get(otherId) ?? [], viewTime);
@@ -347,7 +361,7 @@ export class GameRoom extends Room {
     target.hp = Math.max(0, target.hp - amount);
     this.broadcast('damage', { target: targetId, shooter: id, amount });
     if (target.hp === 0) {
-      target.alive = false; target.deaths++; p.kills++;
+      target.alive = false; target.deaths++; p.kills++; target.ads = false; target.sniperReloadAt = 0;
       this.cancelWeapon(targetId);
       this.hitHistory.delete(targetId);
       const targetRuntime = this.runtime.get(targetId); if (targetRuntime) targetRuntime.respawnAt = now + (target.npc ? 3 : RESPAWN_SECONDS);
@@ -366,7 +380,7 @@ export class GameRoom extends Room {
     const m = initialMotion(spawn);
     p.x = m.x; p.y = m.y; p.z = m.z; p.vy = 0; p.grounded = true; p.jumpHeld = false; p.mantleTarget = 0;
     p.side = 'front'; p.transitionCooldown = 0; p.flipCooldown = 0; p.headingOffset = 0;
-    this.cancelWeapon(id); this.weapons.delete(id); p.weapon = 'solder'; p.specialWeapon = ''; p.heat = 0; p.overheated = false; p.weaponReadyAt = 0;
+    this.cancelWeapon(id); this.weapons.delete(id); p.weapon = 'solder'; p.specialWeapon = ''; p.heat = 0; p.overheated = false; p.weaponReadyAt = 0; p.sniperReloadAt = 0; p.ads = false;
     p.hp = 100; p.alive = true; p.ammo = WEAPON.magazine; p.reserve = WEAPON.reserve; p.reloading = false;
     const r = this.runtime.get(id); if (r) { r.queue.clear(); r.credit = 0; r.lastSeq = r.lastReceived; p.ack = r.lastSeq; }
     this.broadcast('feed', { text: `${p.name} respawned` });
@@ -403,10 +417,11 @@ export class GameRoom extends Room {
   private equipWeapon(id: string, value: WeaponId) {
     const p = this.state.players.get(id), r = this.runtime.get(id); if (!p?.alive || !r) return;
     const c = this.weaponControl(id); c.stocks.set(p.weapon as WeaponId, { ammo: p.ammo, reserve: p.reserve });
-    this.cancelWeapon(id); p.reloading = false; r.reloadAt = 0;
+    this.cancelWeapon(id); p.reloading = false; p.ads = false; r.reloadAt = 0;
     const config = WEAPONS[value], stock = c.stocks.get(value) ?? { ammo: config.magazine, reserve: config.reserve };
     p.weapon = value; if (this.practice) p.specialWeapon = value === 'solder' ? '' : value;
     p.ammo = stock.ammo; p.reserve = stock.reserve; p.weaponReadyAt = Math.max(p.weaponReadyAt, r.lastShot + config.fireInterval);
+    if (value === 'sniper' && p.sniperReloadAt > 0) { p.ammo = 0; p.reloading = true; r.reloadAt = p.sniperReloadAt; }
   }
   onDispose() { this.weaponRespawns.clear(); this.weapons.clear(); this.bots.clear(); this.runtime.clear(); this.hitHistory.clear(); }
 }

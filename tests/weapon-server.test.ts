@@ -24,16 +24,17 @@ it('rejects multiplayer weapon selection before pickups', async () => {
   const r = await open('pcb'); r.send('weapon:select', 'iron'); r.send('weapon:select', '__proto__'); trigger(r, 'start');
   await delay(120); expect(human(r).weapon).toBe('solder'); expect(human(r).ammo).toBe(30); expect(human(r).chargeStarted).toBe(0);
 });
-it('measures charge on the server and damages NPCs for 100 only after a full hold', async () => {
+it('measures charge on the server and cannot kill a full health NPC with a full iron hold', async () => {
   const r = await open(); await select(r, 'iron');
   const feeds: string[] = []; r.onMessage('feed', (m: { text: string }) => feeds.push(m.text));
-  trigger(r, 'start'); trigger(r, 'release'); r.send('shoot', { ...shot(r), charge: 100 });
+  trigger(r, 'release'); r.send('shoot', { ...shot(r), charge: 100 });
   await delay(100); expect(human(r).ammo).toBe(5);
   await hold(r, 1100); trigger(r, 'release');
-  await wait(() => !r.state.players.get('npc-0')!.alive);
+  await wait(() => r.state.players.get('npc-0')!.hp === 10);
   expect(human(r).ammo).toBe(4); expect(human(r).chargeStarted).toBe(0);
-  expect(feeds.some(text => text.includes('precision-soldered'))).toBe(true);
-  trigger(r, 'start'); trigger(r, 'release'); await delay(100); expect(human(r).ammo).toBe(4);
+  expect(r.state.players.get('npc-0')!.alive).toBe(true);
+  expect(feeds).toHaveLength(0);
+  trigger(r, 'release'); await delay(100); expect(human(r).ammo).toBe(4);
 });
 it('aggregates eight pump pellets and preserves ammo/cooldown across switching and reload cancellation', async () => {
   const r = await open(); await select(r, 'pump'); r.send('shoot', shot(r)); r.send('shoot', shot(r));
@@ -44,6 +45,25 @@ it('aggregates eight pump pellets and preserves ammo/cooldown across switching a
   await select(r, 'pump'); expect(human(r).ammo).toBe(5);
   r.send('reload'); await wait(() => human(r).ammo === 6 && !human(r).reloading, 3000); expect(human(r).reserve).toBe(35);
 });
+it('fires sniper instantly for 100, automatically recharges and cannot bypass recharge by switching', async () => {
+  const r = await open(); await select(r, 'sniper');
+  r.send('weapon:ads', true); await wait(() => human(r).ads);
+  const damage: number[] = []; r.onMessage('damage', (m: { amount: number }) => damage.push(m.amount));
+  r.send('shoot', shot(r));
+  await wait(() => human(r).reloading);
+  expect(human(r).ammo).toBe(0); expect(human(r).ads).toBe(false);
+  expect(r.state.players.get('npc-0')!.alive).toBe(false); expect(damage).toContain(100);
+  const deadline = human(r).sniperReloadAt;
+  for (let i = 0; i < 3; i++) {
+    await select(r, 'solder'); await select(r, 'sniper');
+    r.send('shoot', shot(r)); await delay(50);
+    expect(human(r).ammo).toBe(0); expect(human(r).sniperReloadAt).toBe(deadline);
+  }
+  await select(r, 'solder'); await wait(() => human(r).sniperReloadAt === 0, 3000);
+  await select(r, 'sniper'); expect(human(r).ammo).toBe(1); expect(human(r).reloading).toBe(false);
+  r.send('shoot', shot(r)); await wait(() => human(r).ammo === 0);
+  await wait(() => human(r).ammo === 1 && !human(r).reloading, 3000);
+}, 10000);
 it('pulses hot air server-side, damages NPCs, overheats and cools in about two seconds', async () => {
   const r = await open(); await select(r, 'air'); trigger(r, 'start');
   const timer = setInterval(() => trigger(r, 'aim'), 80), start = Date.now();
@@ -71,7 +91,7 @@ it('clears held charge and restores default inventory on real falling death and 
 }, 12000);
 it('validates multiplayer pickup versions/distance, carries one special, preserves primary ammo and resets on death', async () => {
   const r = await open('pcb'); const peer = await new Client(`ws://localhost:${port}`).joinById<MatchState>(r.roomId, { protocol: MOVEMENT_PROTOCOL }); rooms.push(peer);
-  await wait(() => r.state.phase === 'playing' && r.state.weaponPickups?.size === 9);
+  await wait(() => r.state.phase === 'playing' && r.state.weaponPickups?.size === 11);
   const p = human(r);
   expect([...r.state.weaponPickups.values()].filter(p => p.weapon === 'iron')).toHaveLength(3);
   expect([...r.state.weaponPickups.values()].filter(p => p.weapon === 'air')).toHaveLength(3);

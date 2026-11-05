@@ -51,7 +51,7 @@ export function weaponPickupLocations(map: MapData, seed = Math.floor(Math.rando
   const minSame = Math.max(minAny, mapScale * .20);
   // IDs 0,3,6 are Iron; 1,4,7 are Hot Air; 2,5,8 are Pump.
   // On two-sided boards, alternate surfaces so guns occupy the whole board.
-  for (let i = 0; i < 9; i++) {
+  for (let i = 0; i < 11; i++) {
     const side: BoardSide = i % 2 === 1 && available.back.length ? 'back' : 'front';
     const candidates = available[side];
     if (!candidates.length) continue;
