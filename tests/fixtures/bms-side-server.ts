@@ -6,7 +6,7 @@ import path from 'node:path';
 import { GameRoom, setActiveMap } from '../../server/room.js';
 import type { MapData } from '../../shared/game.js';
 import { MOVEMENT_PROTOCOL } from '../../shared/game.js';
-const map = JSON.parse(fs.readFileSync('assets/public/maps/bms.json', 'utf8')) as MapData;
+const map = JSON.parse(fs.readFileSync(`assets/public/maps/${process.env.TEST_MAP_ID || 'bms'}.json`, 'utf8')) as MapData;
 if (!map.back?.enabled) throw new Error('BMS two-sided import required');
 const edge = process.env.TEST_EDGE || 'north';
 const x = edge === 'east' ? map.width / 2 - .1 : edge === 'west' ? -map.width / 2 + .1 : 0;

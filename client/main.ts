@@ -1,4 +1,5 @@
 import * as THREE from 'three';
+import { PRACTICE_MAPS } from '../shared/maps';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 import { Client, type Room } from '@colyseus/sdk';
 import { aimRay, collisionCacheStats, movementYaw, samplePosition, hitscan, COMBAT, DEV_SCALE, EDGE_FLIP_SECONDS, FLIP_COOLDOWN_SECONDS, JUMP_HEIGHT_RATIO, PLAYER, initialMotion, MOVEMENT_PROTOCOL, stepMotion, testMap, TICK, WEAPON, tuningForHeight, type Input, type MapData, type Motion, type BoardSide, type PositionSample, type ShotInput } from '../shared/game';
@@ -15,6 +16,13 @@ document.title = 'YJSPS · YJSP';
 for (const brand of Array.from(document.querySelectorAll('.brand, .menu-card h1'))) brand.innerHTML = 'YJS<span>PS</span>';
 const practiceButton = document.createElement('button'); practiceButton.id = 'practice'; practiceButton.textContent = 'SOLO PRACTICE';
 el('create').parentElement!.after(practiceButton);
+const mapSelect = document.createElement('select'); mapSelect.id = 'practice-map';
+mapSelect.setAttribute('aria-label', 'Solo Practice map');
+for (const { id, title } of PRACTICE_MAPS) {
+  const option = document.createElement('option'); option.value = id; option.textContent = title; mapSelect.append(option);
+}
+mapSelect.style.cssText = 'width:100%;margin-top:8px;padding:12px;background:#323332;color:#e0a500;border:1px solid #e0a500';
+practiceButton.before(mapSelect);
 practiceButton.style.cssText = 'width:100%;margin-top:8px;padding:15px;background:#323332;color:#e0a500;border:1px solid #e0a500;font-weight:700;cursor:pointer';
 const pickupPrompt = document.createElement('div'); pickupPrompt.id = 'pickup-prompt'; pickupPrompt.style.cssText = 'position:absolute;bottom:190px;width:100%;text-align:center;font:13px monospace;color:#ffcf4a;pointer-events:none'; el('hud').append(pickupPrompt);
 const weaponPickupModels = new Map<string, THREE.Group>();
@@ -137,7 +145,7 @@ let maxPending = 0, maxCorrection = 0;
 (window as unknown as { __pcbPerf: () => unknown }).__pcbPerf = () => ({
   frameTimes: [...frameTimes], playCorrections: [...playCorrections], pending: pending.length, maxPending, correction, maxCorrection,
   renderer: { geometries: renderer.info.memory.geometries, textures: renderer.info.memory.textures, calls: renderer.info.render.calls, triangles: renderer.info.render.triangles },
-  gpu,
+  gpu, mapId: map.id, authoritativeMapId: room?.state.mapId,
   cache: collisionCacheStats(map), heapMB: ((performance as Performance & { memory?: { usedJSHeapSize: number } }).memory?.usedJSHeapSize ?? 0) / 1048576,
   position: [local.x, local.y, local.z], authoritative: room?.state.players.get(room.sessionId) ? [room.state.players.get(room.sessionId)!.x, room.state.players.get(room.sessionId)!.y, room.state.players.get(room.sessionId)!.z] : null,
   side: local.side ?? 'front', authoritativeSide: room?.state.players.get(room.sessionId)?.side,
@@ -155,6 +163,15 @@ function boxMesh(box: { min: number[]; max: number[]; name?: string }, mat: THRE
   mesh.castShadow = false; mesh.receiveShadow = true; return mesh;
 }
 function buildMap(data: MapData) {
+  world.traverse(object => {
+    if (!(object instanceof THREE.Mesh)) return;
+    object.geometry.dispose();
+    const materials = Array.isArray(object.material) ? object.material : [object.material];
+    for (const material of materials) if (![boardMat, copper, dark, pale, red].includes(material)) {
+      if ('map' in material) (material.map as THREE.Texture | null)?.dispose();
+      material.dispose();
+    }
+  });
   world.clear(); map = data;
   const addBackFallback = () => {
     if (!map.back?.enabled) return;
@@ -164,8 +181,28 @@ function buildMap(data: MapData) {
   };
   canvas.dataset.modelLoaded = map.model ? 'false' : 'true';
   const board = new THREE.Mesh(new THREE.BoxGeometry(map.width, .45, map.depth), boardMat);
-  board.position.y = map.ground - .225; world.add(board);
-  if (map.texture) {
+  board.position.y = map.ground - .225; if (!map.surface) world.add(board);
+  if (map.surface) {
+    const data = map;
+    for (const back of [false, true]) {
+      const url = back ? data.backTexture : data.texture; if (!url) continue;
+      new THREE.TextureLoader().load(url, texture => {
+        if (map !== data) { texture.dispose(); return; }
+        texture.colorSpace = THREE.SRGBColorSpace;
+        texture.anisotropy = Math.min(4, renderer.capabilities.getMaxAnisotropy());
+        const positions: number[] = [], uv: number[] = [];
+        const t = data.surface!;
+        for (let i = 0; i < t.length; i += 6) for (const j of back ? [0, 2, 4] : [4, 2, 0]) {
+          const x = t[i+j], z = t[i+j+1];
+          positions.push(x, back ? -data.back!.thickness - .018 : .018, z);
+          uv.push(back ? .5-x/data.width : .5+x/data.width, .5-z/data.depth);
+        }
+        const geo = new THREE.BufferGeometry(); geo.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3)); geo.setAttribute('uv', new THREE.Float32BufferAttribute(uv, 2));
+        world.add(new THREE.Mesh(geo, new THREE.MeshBasicMaterial({ map: texture, side: THREE.DoubleSide })));
+      });
+    }
+  }
+  if (map.texture && !map.surface) {
     new THREE.TextureLoader().load(map.texture, texture => {
       texture.colorSpace = THREE.SRGBColorSpace;
       texture.anisotropy = Math.min(4, renderer.capabilities.getMaxAnisotropy());
@@ -173,7 +210,7 @@ function buildMap(data: MapData) {
       art.rotation.x = -Math.PI / 2; art.position.y = map.ground + .018; world.add(art);
     });
   }
-  const edge = new THREE.Mesh(new THREE.BoxGeometry(map.width + 2, .6, map.depth + 2), dark); edge.position.y = map.ground - .75; world.add(edge);
+  const edge = new THREE.Mesh(new THREE.BoxGeometry(map.width + 2, .6, map.depth + 2), dark); edge.position.y = map.ground - .75; if (!map.surface) world.add(edge);
   // Procedural pads and traces keep the prototype readable before artwork is supplied.
   if (!map.model) {
     const padGeo = new THREE.CylinderGeometry(.25, .25, .015, 12);
@@ -195,6 +232,7 @@ function buildMap(data: MapData) {
         const materials = Array.isArray(object.material) ? object.material : [object.material];
         for (const material of materials) if (material.transparent && material.opacity < .5) { material.opacity = .035; material.depthWrite = false; }
       });
+      if (map !== data) return;
       world.add(gltf.scene); canvas.dataset.modelLoaded = 'true';
     }, undefined, error => { console.error('PCB model load failed', error); canvas.dataset.modelLoaded = 'error'; map.boxes.forEach(box => world.add(boxMesh(box, dark))); addBackFallback(); });
   }
@@ -430,11 +468,11 @@ async function connect(mode: 'play' | 'create' | 'join' | 'reconnect' | 'practic
     if (health.movementProtocol !== MOVEMENT_PROTOCOL) throw new Error('Game server version differs from this page. Restart the server and refresh.');
     devScaleEnabled = health.devScaleEnabled === true;
     const token = sessionStorage.getItem('pcb-reconnection-token');
-    const options = { name, protocol: MOVEMENT_PROTOCOL };
+    const options = { name, protocol: MOVEMENT_PROTOCOL, ...(mode === 'practice' ? { mapId: mapSelect.value } : {}) };
     room = mode === 'practice' ? await client.create<MatchState>('practice', options) : mode === 'reconnect' && token ? await client.reconnect<MatchState>(token) : mode === 'join' ? await client.joinById<MatchState>(code, options) : mode === 'create' ? await client.create<MatchState>('pcb', options) : await client.joinOrCreate<MatchState>('pcb', options);
     const me = room.state?.players?.get(room.sessionId);
     pending = []; lastSentInput = null; nextInputAt = performance.now(); seq = me?.ack ?? 0; yaw = me?.yaw ?? 0; pitch = me?.pitch ?? 0;
-    const response = await fetch('/api/map');
+    const response = await fetch(mode === 'practice' ? `/api/map?practiceMap=${encodeURIComponent(mapSelect.value)}` : '/api/map');
     if (response.ok) buildMap(await response.json() as MapData);
     el('map-name').textContent = map.title.toUpperCase();
     el('room-label').textContent = `ROOM ${room.roomId} · COPY LINK`;

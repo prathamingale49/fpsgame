@@ -36,7 +36,20 @@ export type Box = { min: [number, number, number]; max: [number, number, number]
 export type Spawn = [number, number, number];
 export type BoardSide = 'front' | 'back';
 export type BoardBack = { boxes: Box[]; thickness: number; enabled: boolean };
-export type MapData = { id: string; title: string; width: number; depth: number; ground: number; boxes: Box[]; spawns: Spawn[]; back?: BoardBack; model?: string; texture?: string; components?: { ref: string; x: number; z: number; rotation: number; layer: string }[] };
+export type MapData = { id: string; title: string; width: number; depth: number; ground: number; surface?: number[]; backTexture?: string; boxes: Box[]; spawns: Spawn[]; back?: BoardBack; model?: string; texture?: string; components?: { ref: string; x: number; z: number; rotation: number; layer: string }[] };
+// Triangulated STEP substrate top, including its outline and cutouts.
+export function onBoard(map: MapData, x: number, z: number, side: BoardSide = 'front'): boolean {
+  if (side === 'back') z = -z;
+  if (!map.surface) return Math.abs(x) <= map.width / 2 && Math.abs(z) <= map.depth / 2;
+  const t = map.surface;
+  for (let i = 0; i < t.length; i += 6) {
+    if (x < Math.min(t[i],t[i+2],t[i+4]) || x > Math.max(t[i],t[i+2],t[i+4]) || z < Math.min(t[i+1],t[i+3],t[i+5]) || z > Math.max(t[i+1],t[i+3],t[i+5])) continue;
+    const cross = (a: number, b: number, c: number, d: number) => (x-a)*(d-b)-(z-b)*(c-a);
+    const a = cross(t[i],t[i+1],t[i+2],t[i+3]), b = cross(t[i+2],t[i+3],t[i+4],t[i+5]), c = cross(t[i+4],t[i+5],t[i],t[i+1]);
+    if ((a >= -1e-7 && b >= -1e-7 && c >= -1e-7) || (a <= 1e-7 && b <= 1e-7 && c <= 1e-7)) return true;
+  }
+  return false;
+}
 export type Input = { seq: number; forward: number; strafe: number; yaw: number; pitch: number; jump: boolean; sprint: boolean };
 export type ShotInput = { shotId: number; seq: number; yaw: number; pitch: number; viewTime?: number };
 export function validShotInput(value: unknown): value is ShotInput {
@@ -80,7 +93,7 @@ const surfaceMaps = new WeakMap<MapData, MapData>();
 export function surfaceMap(map: MapData, side: BoardSide = 'front'): MapData {
   if (side !== 'back' || !map.back?.enabled) return map;
   let back = surfaceMaps.get(map);
-  if (!back) { back = { ...map, boxes: map.back.boxes }; surfaceMaps.set(map, back); }
+  if (!back) { back = { ...map, boxes: map.back.boxes, surface: map.surface?.map((v, i) => i % 2 ? -v : v) }; surfaceMaps.set(map, back); }
   return back;
 }
 
@@ -92,6 +105,7 @@ export function transitionEdge(motion: Motion, map: MapData, tuning: PlayerTunin
   const xOutside = Math.abs(motion.x) > map.width / 2;
   const zOutside = Math.abs(motion.z) > map.depth / 2;
   if (!xOutside && !zOutside) return motion;
+  // Cutouts have no floor; outer edges retain the established board flip.
   const side = motion.side === 'back' ? 'front' : 'back';
   const margin = tuning.radius + .3;
   const x = clamp(motion.x, -map.width / 2 + margin, map.width / 2 - margin);
@@ -196,7 +210,7 @@ export function stepMotion(previous: Motion, input: Input, map: MapData, dt = TI
     out.vy -= tuning.gravity * dt;
     out.y += out.vy * dt;
     out.grounded = false;
-    const overBoard = Math.abs(out.x) <= map.width / 2 && Math.abs(out.z) <= map.depth / 2;
+    const overBoard = onBoard(map, out.x, out.z);
     if (overBoard && oldY >= map.ground - .02 && out.y <= map.ground) { out.y = map.ground; out.vy = 0; out.grounded = true; }
   }
   const candidates = nearby(map, Math.min(out.x, out.x + dx) - tuning.radius, Math.min(out.z, out.z + dz) - tuning.radius, Math.max(out.x, out.x + dx) + tuning.radius, Math.max(out.z, out.z + dz) + tuning.radius);

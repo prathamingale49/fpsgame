@@ -10,19 +10,30 @@ try {
   const page = await browser.newPage({ viewport: { width: 1000, height: 700 } });
   await page.addInitScript(() => localStorage.setItem('pcb-quality', 'low'));
   const errors: string[] = []; page.on('pageerror', e => errors.push(e.message));
-  await page.goto(base); await page.locator('#practice').click();
+  await page.goto(base);
+  for (const mapId of ['bms', 'recovery', 'flight-sam']) {
+  await page.locator('#practice-map').selectOption(mapId); await page.locator('#practice').click();
   await page.locator('#hud:not(.hidden)').waitFor({ timeout: 30000 });
   await page.locator('#game[data-model-loaded="true"]').waitFor({ timeout: 60000 });
   await page.waitForFunction(() => document.querySelector('#player-count')?.textContent?.includes('5 NPC TARGETS'));
-  await page.keyboard.press('F5'); await page.locator('#kill-feed').getByText('NPC HITBOXES ON').waitFor();
+  await page.waitForFunction(id => (window as any).__pcbPerf().mapId === id && (window as any).__pcbPerf().authoritativeMapId === id, mapId);
+  for (const [key, name] of [['Digit1','SOLDER BLASTER'],['Digit2','PRECISION IRON'],['Digit3','HOT AIR REWORK GUN'],['Digit4','DESOLDERING PUMP'],['Digit5','CAPACITOR SNIPER']]) {
+    await page.keyboard.press(key); await page.locator('.ammo small').getByText(name, { exact: true }).waitFor();
+  }
+  await page.keyboard.press('Digit1');
+  await page.keyboard.press('F5'); await page.locator('#kill-feed').getByText('NPC HITBOXES ON').last().waitFor();
   await page.keyboard.press('F6'); await page.waitForFunction(() => document.querySelector('#player-count')?.textContent?.includes('RESUME'));
   await page.keyboard.press('F6'); await page.waitForFunction(() => document.querySelector('#player-count')?.textContent?.includes('FREEZE'));
   if (await page.locator('.brand').textContent() !== 'YJSPS') throw new Error('Brand mismatch');
-  fs.mkdirSync('artifacts', { recursive: true }); await page.screenshot({ path: 'artifacts/solo-practice.png' });
+  fs.mkdirSync('artifacts', { recursive: true }); await page.screenshot({ path: `artifacts/solo-practice-${mapId}.png` });
+  await page.keyboard.press('F5');
   await page.evaluate(() => document.exitPointerLock());
   await page.locator('#leave').click();
-  await page.locator('#menu:not(.hidden)').waitFor(); await page.locator('#create').click();
+  await page.locator('#menu:not(.hidden)').waitFor();
+  }
+  await page.locator('#create').click();
   await page.waitForFunction(() => document.querySelector('#player-count')?.textContent?.includes('1 / 8 PLAYERS'));
+  await page.waitForFunction(() => (window as any).__pcbPerf().mapId === 'bms' && (window as any).__pcbPerf().authoritativeMapId === 'bms');
   if (errors.length) throw new Error(errors.join('\n'));
   console.log(JSON.stringify({ practice: true, hitboxes: true, freezeResume: true, multiplayerAfterExit: true, errors }));
 } finally { await browser.close(); server.kill(); }
