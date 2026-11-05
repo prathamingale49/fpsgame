@@ -157,6 +157,29 @@ describe('real Colyseus clients', () => {
     await waitFor(() => a.state.pickups.get('0')?.active === true && b.state.pickups.get('0')?.active === true, 2500);
     await a.leave(); await b.leave();
   }, 25000);
+  it('uses the firing-frame camera direction rather than the previous movement input', async () => {
+    const a = await new Client(`ws://127.0.0.1:${port}`).create<MatchState>('pcb', { name: 'Aim A', protocol: MOVEMENT_PROTOCOL }); rooms.push(a);
+    const b = await new Client(`ws://127.0.0.1:${port}`).joinById<MatchState>(a.roomId, { name: 'Aim B', protocol: MOVEMENT_PROTOCOL }); rooms.push(b);
+    await waitFor(() => a.state.phase === 'playing');
+    a.send('input', { seq: 1, forward: 0, strafe: 0, yaw: Math.PI, pitch: 0, jump: false, sprint: false });
+    await waitFor(() => a.state.players.get(a.sessionId)?.ack === 1);
+    const fired: { shotId?: number; from: number[]; to: number[] }[] = [];
+    a.onMessage('shot', (msg: { shotId?: number; from: number[]; to: number[] }) => fired.push(msg));
+    const ammo = a.state.players.get(a.sessionId)!.ammo;
+    a.send('shoot', { shotId: 1, seq: 1, yaw: 0.4, pitch: -.1, viewTime: Date.now() - 100 });
+    await waitFor(() => fired.length === 1 && a.state.players.get(a.sessionId)?.ammo === ammo - 1);
+    const shot = fired[0];
+    const delta = shot.to.map((value, index) => value - shot.from[index]);
+    const length = Math.hypot(...delta);
+    expect(shot.shotId).toBe(1);
+    expect(delta[0] / length).toBeCloseTo(-Math.sin(.4) * Math.cos(-.1), 3);
+    expect(delta[1] / length).toBeCloseTo(Math.sin(-.1), 3);
+    expect(delta[2] / length).toBeCloseTo(-Math.cos(.4) * Math.cos(-.1), 3);
+    a.send('shoot', { shotId: 2, seq: 1, yaw: null, pitch: 0 });
+    await delay(130);
+    expect(a.state.players.get(a.sessionId)?.ammo).toBe(ammo - 1);
+    await a.leave(); await b.leave();
+  }, 7000);
   it('creates, joins, synchronizes movement, combat and disconnect', async () => {
     const c1 = new Client(`ws://127.0.0.1:${port}`), c2 = new Client(`ws://127.0.0.1:${port}`); clients.push(c1, c2);
     const a = await c1.create<MatchState>('pcb', { name: 'Alpha', protocol: MOVEMENT_PROTOCOL }); rooms.push(a);

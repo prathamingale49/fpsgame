@@ -1,5 +1,5 @@
 export const TICK = 1 / 60;
-export const MOVEMENT_PROTOCOL = 4;
+export const MOVEMENT_PROTOCOL = 5;
 export const MATCH_SECONDS = 300;
 export const RESPAWN_SECONDS = 2.5;
 export type PlayerTuning = { radius: number; height: number; eye: number; walkSpeed: number; sprintSpeed: number; jumpSpeed: number; gravity: number; mantleSpeed: number; mantleReach: number; fallDeathDepth: number };
@@ -27,6 +27,8 @@ export const PLAYER_RADIUS = PLAYER.radius;
 export const PLAYER_HEIGHT = PLAYER.height;
 export const EYE_HEIGHT = PLAYER.eye;
 export const WEAPON = { name: 'Solder Blaster', damage: 25, magazine: 30, reserve: 60, maxReserve: 120, pickupRounds: 30, pickupRespawnSeconds: 20, fireInterval: 0.1, reloadSeconds: 1.7, range: 130 } as const;
+// Combat dimensions are deliberately separate from movement collision dimensions.
+export const COMBAT = { hitRadiusScale: 1.3, hitHeightScale: 1.08, maxRewindMs: 250, historyMs: 400, interpolationMs: 85, extrapolationMs: 35 } as const;
 
 export type Box = { min: [number, number, number]; max: [number, number, number]; name?: string; climbable?: boolean; kind?: 'header' | 'connector' };
 export type Spawn = [number, number, number];
@@ -34,7 +36,42 @@ export type BoardSide = 'front' | 'back';
 export type BoardBack = { boxes: Box[]; thickness: number; enabled: boolean };
 export type MapData = { id: string; title: string; width: number; depth: number; ground: number; boxes: Box[]; spawns: Spawn[]; back?: BoardBack; model?: string; texture?: string; components?: { ref: string; x: number; z: number; rotation: number; layer: string }[] };
 export type Input = { seq: number; forward: number; strafe: number; yaw: number; pitch: number; jump: boolean; sprint: boolean };
+export type ShotInput = { shotId: number; seq: number; yaw: number; pitch: number; viewTime?: number };
+export function validShotInput(value: unknown): value is ShotInput {
+  if (!value || typeof value !== 'object') return false;
+  const v = value as Record<string, unknown>;
+  return Number.isSafeInteger(v.shotId) && Number(v.shotId) >= 0
+    && Number.isSafeInteger(v.seq) && Number(v.seq) >= 0
+    && typeof v.yaw === 'number' && Number.isFinite(v.yaw) && Math.abs(v.yaw) < 1e5
+    && typeof v.pitch === 'number' && Number.isFinite(v.pitch) && Math.abs(v.pitch) <= 1.5
+    && (v.viewTime === undefined || (typeof v.viewTime === 'number' && Number.isFinite(v.viewTime)));
+}
 export type Motion = { x: number; y: number; z: number; vy: number; grounded: boolean; jumpHeld: boolean; mantleTarget: number; side?: BoardSide; transitionCooldown?: number; headingOffset?: number };
+export type PositionSample = { time: number; x: number; y: number; z: number; side?: BoardSide };
+// Snapshots are sampled in server time so the client can render and shoot against
+// the same historical target position; never interpolate through side changes.
+export function samplePosition(samples: readonly PositionSample[], time: number, extrapolationMs = 0): PositionSample | undefined {
+  if (!samples.length) return undefined;
+  if (time <= samples[0].time) return samples[0];
+  const last = samples[samples.length - 1];
+  if (time >= last.time) {
+    if (samples.length < 2 || extrapolationMs <= 0) return last;
+    const before = samples[samples.length - 2];
+    const interval = last.time - before.time;
+    if (interval <= 0 || last.side !== before.side || Math.hypot(last.x - before.x, last.y - before.y, last.z - before.z) > 2) return last;
+    const dt = Math.min(time - last.time, extrapolationMs) / interval;
+    return { time: last.time + dt * interval, x: last.x + (last.x - before.x) * dt, y: last.y + (last.y - before.y) * dt, z: last.z + (last.z - before.z) * dt, side: last.side };
+  }
+  for (let i = 1; i < samples.length; i++) {
+    const next = samples[i];
+    if (next.time < time) continue;
+    const prev = samples[i - 1];
+    if (prev.side !== next.side || Math.hypot(next.x - prev.x, next.y - prev.y, next.z - prev.z) > 2) return prev;
+    const alpha = (time - prev.time) / (next.time - prev.time || 1);
+    return { time, x: prev.x + (next.x - prev.x) * alpha, y: prev.y + (next.y - prev.y) * alpha, z: prev.z + (next.z - prev.z) * alpha, side: prev.side };
+  }
+  return last;
+}
 export function movementYaw(yaw: number, motion: Motion): number { return yaw + (motion.headingOffset ?? 0); }
 
 const surfaceMaps = new WeakMap<MapData, MapData>();
@@ -205,7 +242,9 @@ export function rayBox(ray: Ray, box: Box): number {
   return lo;
 }
 export function rayPlayer(ray: Ray, player: Motion, tuning: PlayerTuning = PLAYER): number {
-  const box: Box = { min: [player.x - tuning.radius, player.y, player.z - tuning.radius], max: [player.x + tuning.radius, player.y + tuning.height, player.z + tuning.radius] };
+  const radius = tuning.radius * COMBAT.hitRadiusScale;
+  const excessHeight = tuning.height * (COMBAT.hitHeightScale - 1);
+  const box: Box = { min: [player.x - radius, player.y - excessHeight / 2, player.z - radius], max: [player.x + radius, player.y + tuning.height + excessHeight / 2, player.z + radius] };
   return rayBox(ray, box);
 }
 export function hitscan(ray: Ray, map: MapData, players: Iterable<[string, Motion]>, shooterId: string, tuning: PlayerTuning = PLAYER, side: BoardSide = 'front'): { target?: string; distance: number } {

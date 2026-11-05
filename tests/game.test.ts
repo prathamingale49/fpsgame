@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import fs from 'node:fs';
-import { aimRay, collisionCacheStats, hitscan, initialMotion, JUMP_HEIGHT_RATIO, PLAYER, rayBox, rayPlayer, stepMotion, testMap, TICK, tuningForHeight, validDevHeight, WEAPON, type Input, type MapData } from '../shared/game';
+import { aimRay, collisionCacheStats, COMBAT, hitscan, initialMotion, JUMP_HEIGHT_RATIO, PLAYER, rayBox, rayPlayer, samplePosition, stepMotion, testMap, TICK, tuningForHeight, validDevHeight, validShotInput, WEAPON, type Input, type MapData, type PositionSample } from '../shared/game';
 
 const input: Input = { seq: 1, forward: 1, strafe: 0, yaw: 0, pitch: 0, jump: false, sprint: false };
 describe('movement', () => {
@@ -120,6 +120,47 @@ describe('movement', () => {
   });
 });
 describe('combat', () => {
+  it('validates per-shot camera aim, sequence, and view timestamps', () => {
+    const valid = { shotId: 1, seq: 17, yaw: Math.PI, pitch: -.22, viewTime: 123456789 };
+    expect(validShotInput(valid)).toBe(true);
+    for (const change of [{ pitch: Infinity }, { yaw: NaN }, { pitch: 2 }, { seq: -1 }, { shotId: 1.5 }, { viewTime: 'bad' }]) {
+      expect(validShotInput({ ...valid, ...change })).toBe(false);
+    }
+  });
+  it('enlarges only the shooting hitbox, leaving movement dimensions unchanged', () => {
+    const opponent = initialMotion([0, 0, -5]);
+    const inside = PLAYER.radius * 1.16;
+    const outside = PLAYER.radius * (COMBAT.hitRadiusScale + .1);
+    const straightRay = (x: number) => ({ origin: [x, PLAYER.eye, 0] as [number, number, number], direction: [0, 0, -1] as [number, number, number] });
+    expect(rayPlayer(straightRay(inside), opponent)).toBeLessThan(Infinity);
+    expect(rayPlayer(straightRay(outside), opponent)).toBe(Infinity);
+    expect(PLAYER.radius).toBeCloseTo(.18);
+    expect(tuningForHeight(.9).radius).toBeCloseTo(.18);
+  });
+  it('interpolates a displayed moving target to the timestamp used for hit registration', () => {
+    const samples: PositionSample[] = [
+      { time: 1000, x: 0, y: 0, z: -5, side: 'front' },
+      { time: 1100, x: 2, y: 0, z: -5, side: 'front' },
+    ];
+    const visible = samplePosition(samples, 1025)!;
+    expect(visible.x).toBeCloseTo(.5);
+    const map = { ...testMap, boxes: [] };
+    const ray = { origin: [visible.x, PLAYER.eye, 0] as [number, number, number], direction: [0, 0, -1] as [number, number, number] };
+    expect(hitscan(ray, map, [['moving', { ...initialMotion([0, 0, 0]), ...visible }]], 'self').target).toBe('moving');
+    expect(hitscan(ray, map, [['moving', { ...initialMotion([0, 0, 0]), ...samples[1] }]], 'self').target).toBeUndefined();
+    expect(samplePosition(samples, 1200)!.x).toBe(2); // server never extrapolates hitboxes
+    expect(samplePosition(samples, 1200, COMBAT.extrapolationMs)!.x).toBeCloseTo(2.7); // client visual cap
+  });
+  it('never interpolates through a side transition', () => {
+    const samples: PositionSample[] = [
+      { time: 1000, x: -8, y: 0, z: 3, side: 'front' },
+      { time: 1050, x: 8, y: 0, z: -3, side: 'back' },
+    ];
+    expect(samplePosition(samples, 1025)!.side).toBe('front');
+    expect(samplePosition(samples, 1025)!.x).toBe(-8);
+    expect(samplePosition(samples, 1100, 30)!.side).toBe('back');
+    expect(samplePosition(samples, 1100, 30)!.x).toBe(8);
+  });
   it('hits player before distant geometry', () => {
     const map = { ...testMap, boxes: [] };
     const ray = aimRay(0, 0, 0, 0, 0);

@@ -1,7 +1,7 @@
 import * as THREE from 'three';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 import { Client, type Room } from '@colyseus/sdk';
-import { collisionCacheStats, movementYaw, DEV_SCALE, JUMP_HEIGHT_RATIO, PLAYER, initialMotion, MOVEMENT_PROTOCOL, stepMotion, testMap, TICK, WEAPON, tuningForHeight, type Input, type MapData, type Motion, type BoardSide } from '../shared/game';
+import { aimRay, collisionCacheStats, movementYaw, samplePosition, hitscan, COMBAT, DEV_SCALE, JUMP_HEIGHT_RATIO, PLAYER, initialMotion, MOVEMENT_PROTOCOL, stepMotion, testMap, TICK, WEAPON, tuningForHeight, type Input, type MapData, type Motion, type BoardSide, type PositionSample, type ShotInput } from '../shared/game';
 import type { MatchState, PlayerState } from '../server/state';
 import './style.css';
 
@@ -32,6 +32,7 @@ let devScaleEnabled = false;
 let lastSentInput: Input | null = null;
 let nextInputAt = performance.now();
 let yaw = 0, pitch = 0, seq = 0, mouseDown = false, lastShot = 0;
+let nextShotId = 0, serverClockOffsetMs = NaN, lastViewTime = 0;
 let sensitivity = Number(localStorage.getItem('pcb-sensitivity')) || .0022;
 let volume = Number(localStorage.getItem('pcb-volume') ?? '.25');
 let audioContext: AudioContext | null = null;
@@ -57,9 +58,10 @@ function recordMovement(event: string, ack: number, correctionValue = 0, forward
   if (movementEvents.length > 4000) movementEvents.shift();
 }
 const keys = new Set<string>();
-type RemotePlayer = { mesh: THREE.Group; healthBar: THREE.Group; healthFill: THREE.Mesh<THREE.PlaneGeometry, THREE.MeshBasicMaterial>; target: THREE.Vector3; yaw: number; hp: number; displayedHp: number };
+type RemotePlayer = { mesh: THREE.Group; healthBar: THREE.Group; healthFill: THREE.Mesh<THREE.PlaneGeometry, THREE.MeshBasicMaterial>; samples: PositionSample[]; yaw: number; hp: number; displayedHp: number };
 const remotes = new Map<string, RemotePlayer>();
 const shots: { line: THREE.LineSegments | THREE.Line; born: number }[] = [];
+const predictedTracers = new Map<number, THREE.Line>();
 const spoolMeshes = new Map<string, THREE.Group>();
 let correction = 0, collisionChecks = 0, ping = 0;
 const debug = document.createElement('div'); debug.id = 'perf-debug'; debug.hidden = true; el('app').append(debug);
@@ -228,10 +230,13 @@ function makeSpool(): THREE.Group {
   const solder = new THREE.Mesh(new THREE.TorusGeometry(.29, .065, 6, 18), metal); solder.rotation.y = Math.PI / 2; group.add(solder);
   return group;
 }
-function addTracer(from: number[], to: number[]) {
+function addTracer(from: number[], to: number[]): THREE.Line {
   const geo = new THREE.BufferGeometry().setFromPoints([new THREE.Vector3(...from), new THREE.Vector3(...to)]);
   const line = new THREE.Line(geo, new THREE.LineBasicMaterial({ color: '#e6e9d8', transparent: true, opacity: .9 }));
   scene.add(line); shots.push({ line, born: performance.now() });
+  return line;
+}
+function addImpactSparks(from: number[], to: number[]) {
   const end = new THREE.Vector3(...to), start = new THREE.Vector3(...from);
   if (end.distanceTo(start) >= WEAPON.range - .01) return;
   const points: THREE.Vector3[] = [];
@@ -271,6 +276,12 @@ function syncState(state: MatchState) {
     if (movementSnapshots.length > 4000) movementSnapshots.shift();
   }
   snapshot = state;
+  if (state.serverTime > 0) {
+    // Clock synchronization is based on server-authored snapshot timestamps and
+    // an RTT/2 estimate. A stable offset keeps visual interpolation monotonic.
+    const candidate = Date.now() - state.serverTime - ping / 2;
+    serverClockOffsetMs = Number.isFinite(serverClockOffsetMs) ? serverClockOffsetMs * .95 + candidate * .05 : candidate;
+  }
   if (!room) return;
   const me = state.players.get(room.sessionId);
   if (me) {
@@ -297,11 +308,15 @@ function syncState(state: MatchState) {
       const mesh = makePlayer(playerColorIndex++);
       const { bar, fill } = makeHealthBar();
       scene.add(mesh, bar);
-      entry = { mesh, healthBar: bar, healthFill: fill, target: new THREE.Vector3(p.x, p.y, p.z), yaw: p.yaw, hp: p.hp, displayedHp: p.hp };
-      mesh.position.copy(entry.target);
+      entry = { mesh, healthBar: bar, healthFill: fill, samples: [], yaw: p.yaw, hp: p.hp, displayedHp: p.hp };
+      mesh.position.set(p.x, p.y, p.z);
       remotes.set(id, entry);
     }
-    entry.target.set(p.x, p.y, p.z); entry.yaw = p.yaw + p.headingOffset; entry.hp = p.hp;
+    if (state.serverTime > 0 && (entry.samples.at(-1)?.time ?? -Infinity) < state.serverTime) {
+      entry.samples.push({ time: state.serverTime, x: p.x, y: p.y, z: p.z, side: p.side as BoardSide });
+      while (entry.samples.length && entry.samples[0].time < state.serverTime - COMBAT.historyMs) entry.samples.shift();
+    }
+    entry.yaw = p.yaw + p.headingOffset; entry.hp = p.hp;
   });
   for (const [id, entry] of remotes) if (!present.has(id)) {
     scene.remove(entry.mesh, entry.healthBar);
@@ -341,11 +356,22 @@ async function connect(mode: 'play' | 'create' | 'join' | 'reconnect') {
     history.replaceState(null, '', `?room=${room.roomId}`);
     room.onStateChange(syncState);
     room.onMessage('feed', (msg: { text: string }) => showFeed(msg.text));
-    room.onMessage('shot', (msg: { shooter: string; side: BoardSide; from: number[]; to: number[]; hit?: string }) => { if (msg.side === (local.side ?? 'front')) addTracer(msg.from, msg.to); if (msg.shooter === room?.sessionId && msg.hit) flashHit(); });
+    room.onMessage('shot', (msg: { shooter: string; shotId?: number; side: BoardSide; from: number[]; to: number[]; hit?: string }) => {
+      if (msg.side === (local.side ?? 'front')) {
+        const predicted = msg.shooter === room?.sessionId && msg.shotId !== undefined ? predictedTracers.get(msg.shotId) : undefined;
+        if (predicted) {
+          // Correct the one locally predicted tracer to the server result.
+          predicted.geometry.setFromPoints([new THREE.Vector3(...msg.from), new THREE.Vector3(...msg.to)]);
+          predictedTracers.delete(msg.shotId!);
+        } else addTracer(msg.from, msg.to);
+        addImpactSparks(msg.from, msg.to);
+      }
+      if (msg.shooter === room?.sessionId && msg.hit) flashHit();
+    });
     room.onMessage('damage', (msg: { target: string }) => { if (msg.target === room?.sessionId) flashDamage(); });
     room.onMessage('pickup', (msg: { player: string; amount: number }) => { if (msg.player === room?.sessionId) { showFeed(`+${msg.amount} solder rounds`); sound(710, .16, 'sine'); } });
     room.onDrop(() => { recordMovement('drop', me?.ack ?? 0); mouseDown = false; pending = []; lastSentInput = null; showFeed('Connection lost · reconnecting'); });
-    room.onReconnect(() => { const ack = room!.state.players.get(room!.sessionId)?.ack ?? seq; recordMovement('reconnect', ack); pending = []; lastSentInput = null; seq = ack; sessionStorage.setItem('pcb-reconnection-token', room!.reconnectionToken); syncState(room!.state); showFeed('Connection restored'); });
+    room.onReconnect(() => { const ack = room!.state.players.get(room!.sessionId)?.ack ?? seq; recordMovement('reconnect', ack); pending = []; lastSentInput = null; seq = ack; serverClockOffsetMs = NaN; sessionStorage.setItem('pcb-reconnection-token', room!.reconnectionToken); syncState(room!.state); showFeed('Connection restored'); });
     room.onLeave(() => { sessionStorage.removeItem('pcb-reconnection-token'); room = null; scalePanel.hidden = true; el('menu').classList.remove('hidden'); el('hud').classList.add('hidden'); document.exitPointerLock(); showFeed('Disconnected from room'); });
     sessionStorage.setItem('pcb-reconnection-token', room.reconnectionToken);
     if (room.state?.players) syncState(room.state);
@@ -415,10 +441,14 @@ function frame(now: number) {
   if (room && snapshot) {
     const me = snapshot.players.get(room.sessionId);
     if (mouseDown && document.pointerLockElement === canvas && me?.alive && !me.reloading && me.ammo > 0 && now - lastShot >= WEAPON.fireInterval * 1000) {
-      room.send('shoot'); lastShot = now; gunView.position.z = -.09; gunView.rotation.x = .09; muzzle.visible = true; sound(235, .07);
-      const from = [local.x, local.y + playerTuning.eye, local.z];
-      const direction = [-Math.sin(movementYaw(yaw, local)) * Math.cos(pitch), Math.sin(pitch), -Math.cos(movementYaw(yaw, local)) * Math.cos(pitch)];
-      addTracer(from, from.map((value, i) => value + direction[i] * 2.5));
+      const shotId = ++nextShotId;
+      const shot: ShotInput = { shotId, seq, yaw, pitch, viewTime: lastViewTime || undefined };
+      room.send('shoot', shot); lastShot = now; gunView.position.z = -.09; gunView.rotation.x = .09; muzzle.visible = true; sound(235, .07);
+      const ray = aimRay(local.x, local.y, local.z, movementYaw(yaw, local), pitch, playerTuning);
+      // Immediate full-length preview, without invented impact sparks. The
+      // authoritative response reuses and corrects this same tracer.
+      const predicted = hitscan(ray, map, [], room.sessionId, playerTuning, local.side ?? 'front');
+      predictedTracers.set(shotId, addTracer(ray.origin, ray.origin.map((value, i) => value + ray.direction[i] * predicted.distance)));
     }
     camera.position.set(local.x, local.y + playerTuning.eye, local.z);
     canvas.dataset.position = `${local.x.toFixed(2)},${local.y.toFixed(2)},${local.z.toFixed(2)}`;
@@ -439,8 +469,11 @@ function frame(now: number) {
   } else {
     const t = now * .00015; camera.position.set(Math.sin(t) * 30, 24, Math.cos(t) * 30); camera.lookAt(0, 0, 0);
   }
+  const renderTime = Number.isFinite(serverClockOffsetMs) ? Date.now() - serverClockOffsetMs - COMBAT.interpolationMs : 0;
+  if (renderTime > 0) lastViewTime = renderTime;
   for (const entry of remotes.values()) {
-    entry.mesh.position.lerp(entry.target, Math.min(1, dt * 12));
+    const rendered = samplePosition(entry.samples, renderTime, COMBAT.extrapolationMs);
+    if (rendered) entry.mesh.position.set(rendered.x, rendered.y, rendered.z);
     entry.mesh.rotation.y += Math.atan2(Math.sin(entry.yaw - entry.mesh.rotation.y), Math.cos(entry.yaw - entry.mesh.rotation.y)) * Math.min(1, dt * 12);
     entry.displayedHp = THREE.MathUtils.damp(entry.displayedHp, entry.hp, 18, dt);
     const fraction = THREE.MathUtils.clamp(entry.displayedHp / 100, 0, 1);
@@ -450,7 +483,10 @@ function frame(now: number) {
     entry.healthBar.position.set(entry.mesh.position.x, entry.mesh.position.y + playerTuning.height + .3, entry.mesh.position.z);
     entry.healthBar.quaternion.copy(camera.quaternion);
   }
-  for (let i = shots.length - 1; i >= 0; i--) if (now - shots[i].born > 120) { scene.remove(shots[i].line); shots[i].line.geometry.dispose(); (shots[i].line.material as THREE.Material).dispose(); shots.splice(i, 1); }
+  for (let i = shots.length - 1; i >= 0; i--) if (now - shots[i].born > 120) {
+    for (const [id, predicted] of predictedTracers) if (predicted === shots[i].line) predictedTracers.delete(id);
+    scene.remove(shots[i].line); shots[i].line.geometry.dispose(); (shots[i].line.material as THREE.Material).dispose(); shots.splice(i, 1);
+  }
   const width = innerWidth, height = innerHeight;
   if (canvas.width !== Math.round(width * renderer.getPixelRatio()) || canvas.height !== Math.round(height * renderer.getPixelRatio())) { renderer.setSize(width, height, false); camera.aspect = width / height; camera.updateProjectionMatrix(); }
   const renderStart = performance.now(); renderer.render(scene, camera); renderCpuMs = performance.now() - renderStart;

@@ -23,5 +23,6 @@ export const MatchState = schema({
   winner: t.string().default(''),
   mapId: t.string().default('test'),
   playerHeight: t.float32().default(1.8),
+  serverTime: t.float64().default(0),
 }, 'MatchState');
 export type MatchState = SchemaType<typeof MatchState>;
