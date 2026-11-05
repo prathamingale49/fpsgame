@@ -20,7 +20,7 @@ cone; overheats after about 3 seconds and cools in about 2), **4** Desoldering
 Pump (8 pellets). **R** reloads. Charge/heat and reload state appear above the
 ammo HUD. Switching preserves ammunition and cooldown and cancels charge/reload.
 Losing focus or pointer lock cancels held special attacks. Public multiplayer
-remains Solder Blaster-only; weapon pickups are reserved for a later release.
+remains Solder Blaster-only; public weapon pickups are reserved for a later release.
 
 YJSP + FPS: **YJS** in white, **PS** in gold. Click **SOLO PRACTICE** to start
 a private, untimed session with five rocket targets: one stationary, two walking,

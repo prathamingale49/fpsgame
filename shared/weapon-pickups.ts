@@ -41,6 +41,9 @@ export function weaponPickupLocations(map: MapData): Point[] {
     const candidates = regions[side] ?? [];
     let point: Point | undefined, best = -Infinity;
     for (const p of candidates) {
+      // Reserve space for the longest rotating miniature, not just the player.
+      if (Math.abs(p.x) > map.width / 2 - .9 || Math.abs(p.z) > map.depth / 2 - .9) continue;
+      if (surfaceMap(map, p.side).boxes.some(b => b.max[1] > p.y + .3 && b.min[1] < p.y + 1.1 && p.x + .9 > b.min[0] && p.x - .9 < b.max[0] && p.z + .9 > b.min[2] && p.z - .9 < b.max[2])) continue;
       const same = chosen.filter(q => q.side === p.side);
       const score = same.length ? Math.min(...same.map(q => Math.hypot(p.x - q.x, p.z - q.z))) : -Math.hypot(p.x - map.spawns[Math.min(i, map.spawns.length - 1)][0], p.z - map.spawns[Math.min(i, map.spawns.length - 1)][2]);
       if (score > best && same.every(q => Math.hypot(p.x - q.x, p.z - q.z) > 1)) { best = score; point = p; }
