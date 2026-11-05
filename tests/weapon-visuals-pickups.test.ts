@@ -28,19 +28,22 @@ it('animates recoil, fan, plunger and reload without allocating geometry or chan
   expect(m.flash.geometry).toBe(geometry); expect(original).toEqual({ ...input, fireAt: 100 });
   const air = createWeaponModel('air'); animateWeapon(air, { ...input, firing: true, heat: 1 }); expect(air.fan.rotation.z).toBeGreaterThan(0);
 });
-it('places deterministic distinct pickups on clear bounded map surfaces', () => {
+it('places nine independently spread pickups reproducibly when seeded', () => {
   const map = { ...testMap, back: { enabled: true, thickness: 1.6, boxes: testMap.boxes } };
-  const points = weaponPickupLocations(map); expect(points).toHaveLength(9); expect(points).toEqual(weaponPickupLocations(map));
+  const points = weaponPickupLocations(map, 12345);
+  expect(points).toHaveLength(9);
+  expect(points).toEqual(weaponPickupLocations(map, 12345));
+  expect(points).not.toEqual(weaponPickupLocations(map, 67890));
   expect(points.some(p => p.side === 'back')).toBe(true);
-  for (let cluster = 0; cluster < 3; cluster++) {
-    const group = points.slice(cluster * 3, cluster * 3 + 3);
-    expect(group).toHaveLength(3);
-    expect(new Set(group.map(p => p.side)).size).toBe(1);
-    for (const a of group) for (const b of group) if (a !== b) expect(Math.hypot(a.x - b.x, a.z - b.z)).toBeGreaterThanOrEqual(1.8 - 1e-6);
-  }
-  for (const p of points) {
-    expect(Math.abs(p.x)).toBeLessThan(map.width / 2); expect(Math.abs(p.z)).toBeLessThan(map.depth / 2);
+  for (let i = 0; i < points.length; i++) {
+    const p = points[i];
+    expect(Math.abs(p.x)).toBeLessThan(map.width / 2);
+    expect(Math.abs(p.z)).toBeLessThan(map.depth / 2);
     expect(canCollectWeapon({ ...p, alive: true }, { ...p, weapon: 'iron', active: true, version: 0 }, map)).toBe(true);
+    for (let j = 0; j < i; j++) if (points[j].side === p.side) {
+      const spacing = Math.hypot(p.x - points[j].x, p.z - points[j].z);
+      expect(spacing).toBeGreaterThanOrEqual(1.8 - 1e-6);
+    }
   }
 });
 it('rejects distant dead inactive invalid and opposite-side pickup interactions', () => {
@@ -56,6 +59,6 @@ it('gives each gun its own electronics-themed kill message', () => {
 });
 it('places all three pickups safely on the actual BMS map', () => {
   const map = JSON.parse(fs.readFileSync('assets/public/maps/bms.json', 'utf8'));
-  const points = weaponPickupLocations(map); expect(points).toHaveLength(9);
+  const points = weaponPickupLocations(map, 42); expect(points).toHaveLength(9);
   for (const p of points) expect(canCollectWeapon({ ...p, alive: true }, { ...p, weapon: 'iron', active: true, version: 0 }, map)).toBe(true);
 });
