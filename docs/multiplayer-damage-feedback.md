@@ -1,0 +1,7 @@
+Confirmed damage now sends a private event to the attacker and victim rather than every room client. Only the attacker creates floating numbers and hit feedback; the victim retains the existing damage flash. All weapons use the same damage path. Prediction and shot tracers never create numbers.
+
+Numbers retain the practice yellow rise/fade and one-second lifetime. Rapid hits on one target coalesce in 200ms windows, bounded by the original lifetime, with at most six labels overall. Elimination numbers are larger and brighter; the confirmed kill marker accompanies the existing attacker-only elimination chord and announcement. Hit sounds are rate-limited to avoid overlapping hot-air/Blaster ticks.
+
+Labels follow the interpolated target position while alive and retain the confirmed death position after an elimination. They hide during PCB transitions, on opposite surfaces, behind map collision geometry, below the substrate, and outside the camera depth range. Room changes clear old labels. Occlusion uses gameplay collision geometry, so purely decorative geometry without collision can still overlap a label.
+
+Tests cover coalescing/lifetime boundaries and surface/obstacle visibility, plus real three-client multiplayer damage privacy and HP agreement for all five weapons. Manual check: join with two browser windows, shoot each other, confirm only the attacker sees yellow numbers, hold Blaster/Hot Air to check clutter, then test an elimination and a side flip. Solo Practice retains NPC numbers, F5 hitboxes and F6 movement control.

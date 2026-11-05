@@ -4,7 +4,11 @@ import { Client, type Room } from '@colyseus/sdk';
 import { aimRay, collisionCacheStats, movementYaw, samplePosition, hitscan, COMBAT, DEV_SCALE, EDGE_FLIP_SECONDS, FLIP_COOLDOWN_SECONDS, JUMP_HEIGHT_RATIO, PLAYER, initialMotion, MOVEMENT_PROTOCOL, stepMotion, testMap, TICK, WEAPON, tuningForHeight, type Input, type MapData, type Motion, type BoardSide, type PositionSample, type ShotInput } from '../shared/game';
 import type { MatchState, PlayerState } from '../server/state';
 import './style.css';
+import { WEAPONS, WEAPON_IDS, CHARGE, HEAT, type WeaponId } from '../shared/weapons';
+import { createWeaponModel, animateWeapon, disposeWeaponModel } from './weapon-models';
+import { WEAPON_PICKUPS } from '../shared/weapon-pickups';
 import { EdgeOrbit } from './edge-orbit';
+import { mergeDamageNumber, damageNumberVisible, type DamageFeedback, type DamageNumber } from './damage-feedback';
 
 const el = <T extends HTMLElement>(id: string) => document.getElementById(id) as T;
 document.title = 'YJSPS · YJSP';
@@ -12,9 +16,22 @@ for (const brand of Array.from(document.querySelectorAll('.brand, .menu-card h1'
 const practiceButton = document.createElement('button'); practiceButton.id = 'practice'; practiceButton.textContent = 'SOLO PRACTICE';
 el('create').parentElement!.after(practiceButton);
 practiceButton.style.cssText = 'width:100%;margin-top:8px;padding:15px;background:#323332;color:#e0a500;border:1px solid #e0a500;font-weight:700;cursor:pointer';
+const pickupPrompt = document.createElement('div'); pickupPrompt.id = 'pickup-prompt'; pickupPrompt.style.cssText = 'position:absolute;bottom:190px;width:100%;text-align:center;font:13px monospace;color:#ffcf4a;pointer-events:none'; el('hud').append(pickupPrompt);
+const weaponPickupModels = new Map<string, THREE.Group>();
+let nearbyWeapon: { id: string; version: number } | null = null, visualFireAt = 0;
+let visualFireWeapon: WeaponId = 'solder';
 let showNpcHitboxes = false;
 const npcHitboxes = new Map<string, THREE.Box3Helper>();
-const damageNumbers: { element: HTMLElement; position: THREE.Vector3; born: number }[] = [];
+const damageNumbers: (DamageNumber & { element: HTMLElement; roomId: string })[] = [];
+const weaponStatus = document.createElement('div'); weaponStatus.id = 'weapon-status';
+weaponStatus.style.cssText = 'position:absolute;right:28px;bottom:145px;color:#ffd24a;font:12px monospace;text-align:right;pointer-events:none';
+el('hud').append(weaponStatus);
+const weaponMeter = document.createElement('progress'); weaponMeter.id = 'weapon-meter'; weaponMeter.max = 1;
+weaponMeter.style.cssText = 'position:absolute;right:28px;bottom:125px;width:200px;height:10px;accent-color:#ffd24a'; weaponMeter.hidden = true; el('hud').append(weaponMeter);
+let specialHeld = false, fullChargeCue = false;
+const currentWeapon = () => WEAPONS[(room?.state.players?.get(room.sessionId)?.weapon ?? 'solder') as WeaponId];
+const weaponShot = (): ShotInput => ({ shotId: ++nextShotId, seq, yaw, pitch, viewTime: lastViewTime || undefined });
+function cancelSpecial() { specialHeld = false; fullChargeCue = false; if (room) room.send('weapon:trigger', { action: 'cancel' }); }
 const canvas = el<HTMLCanvasElement>('game');
 const renderer = new THREE.WebGLRenderer({ canvas, antialias: true, powerPreference: 'high-performance' });
 let quality = localStorage.getItem('pcb-quality') || 'balanced';
@@ -214,9 +231,16 @@ function makeHealthBar(): { bar: THREE.Group; fill: THREE.Mesh<THREE.PlaneGeomet
   return { bar, fill };
 }
 const gunView = new THREE.Group(); camera.add(gunView); scene.add(camera);
+const airCone = new THREE.Mesh(new THREE.ConeGeometry(Math.tan(HEAT.halfAngle) * WEAPONS.air.range, WEAPONS.air.range, 12, 1, true), new THREE.MeshBasicMaterial({ color: '#ff9d36', transparent: true, opacity: .12, depthWrite: false, side: THREE.DoubleSide }));
+airCone.rotation.x = Math.PI / 2; airCone.position.set(.18, -.12, -.3 - WEAPONS.air.range / 2); airCone.visible = false; camera.add(airCone);
+const heatPositions = new Float32Array(24 * 3);
+const heatGeometry = new THREE.BufferGeometry(); heatGeometry.setAttribute('position', new THREE.BufferAttribute(heatPositions, 3));
+const heatParticles = new THREE.Points(heatGeometry, new THREE.PointsMaterial({ color: '#ffb35a', size: .07, transparent: true, opacity: .65, depthWrite: false }));
+heatParticles.position.set(.18, -.12, -.3); heatParticles.visible = false; camera.add(heatParticles);
 gunView.scale.setScalar(.75 * PLAYER.height / 1.8);
-const gunBody = new THREE.Mesh(new THREE.BoxGeometry(.18, .22, .75), dark); gunBody.position.set(.43, -.36, -.75); gunView.add(gunBody);
-const gunAccent = new THREE.Mesh(new THREE.BoxGeometry(.19, .07, .28), copper); gunAccent.position.set(.43, -.22, -.77); gunView.add(gunAccent);
+const modelAnchor = new THREE.Group(); modelAnchor.position.set(.43, -.33, -1.15); gunView.add(modelAnchor);
+const weaponModels = new Map(WEAPON_IDS.map(id => [id, createWeaponModel(id)]));
+for (const model of weaponModels.values()) modelAnchor.add(model.root);
 const muzzle = new THREE.Mesh(new THREE.SphereGeometry(.14, 8, 6), new THREE.MeshBasicMaterial({ color: '#f6f5b2' }));
 muzzle.position.set(.43, -.33, -1.19); muzzle.visible = false; gunView.add(muzzle);
 function sound(frequency: number, duration: number, wave: OscillatorType = 'sawtooth') {
@@ -277,7 +301,12 @@ function showFeed(text: string, chain = 1) {
   setTimeout(() => item.remove(), 5000);
   while (el('kill-feed').children.length > 5) el('kill-feed').lastElementChild?.remove();
 }
-function flashHit() { el('hitmarker').classList.remove('hidden'); sound(1050, .08, 'sine'); setTimeout(() => el('hitmarker').classList.add('hidden'), 170); }
+let hitTimer: ReturnType<typeof setTimeout> | undefined, lastHitSound = -Infinity;
+function flashHit(eliminated = false) {
+  clearTimeout(hitTimer); el('hitmarker').classList.remove('hidden'); el('hitmarker').classList.toggle('confirmed-kill', eliminated);
+  if (!eliminated && performance.now() - lastHitSound > 80) { sound(1050, .045, 'sine'); lastHitSound = performance.now(); }
+  hitTimer = setTimeout(() => el('hitmarker').classList.add('hidden'), eliminated ? 300 : 170);
+}
 function flashDamage() { el('damage-flash').style.opacity = '.8'; sound(130, .2); setTimeout(() => el('damage-flash').style.opacity = '0', 180); }
 function makeSpool(): THREE.Group {
   const group = new THREE.Group();
@@ -287,9 +316,9 @@ function makeSpool(): THREE.Group {
   const solder = new THREE.Mesh(new THREE.TorusGeometry(.29, .065, 6, 18), metal); solder.rotation.y = Math.PI / 2; group.add(solder);
   return group;
 }
-function addTracer(from: number[], to: number[]): THREE.Line {
+function addTracer(from: number[], to: number[], color = '#e6e9d8'): THREE.Line {
   const geo = new THREE.BufferGeometry().setFromPoints([new THREE.Vector3(...from), new THREE.Vector3(...to)]);
-  const line = new THREE.Line(geo, new THREE.LineBasicMaterial({ color: '#e6e9d8', transparent: true, opacity: .9 }));
+  const line = new THREE.Line(geo, new THREE.LineBasicMaterial({ color, transparent: true, opacity: .9 }));
   scene.add(line); shots.push({ line, born: performance.now() });
   return line;
 }
@@ -414,26 +443,27 @@ async function connect(mode: 'play' | 'create' | 'join' | 'reconnect' | 'practic
     room.onStateChange(syncState);
     room.onMessage('elimination', (msg: { name: string; chain: number }) => showElimination(msg));
     room.onMessage('feed', (msg: { text: string; chain?: number }) => showFeed(msg.text, msg.chain));
-    room.onMessage('shot', (msg: { shooter: string; shotId?: number; side: BoardSide; from: number[]; to: number[]; hit?: string }) => {
+    room.onMessage('shot', (msg: { shooter: string; shotId?: number; weapon?: WeaponId; side: BoardSide; from: number[]; to: number[]; hit?: string }) => {
+      if (msg.shooter === room?.sessionId) { visualFireAt = performance.now(); visualFireWeapon = msg.weapon ?? 'solder'; }
       if (msg.side === (local.side ?? 'front')) {
         const predicted = msg.shooter === room?.sessionId && msg.shotId !== undefined ? predictedTracers.get(msg.shotId) : undefined;
         if (predicted) {
           // Correct the one locally predicted tracer to the server result.
           predicted.geometry.setFromPoints([new THREE.Vector3(...msg.from), new THREE.Vector3(...msg.to)]);
           predictedTracers.delete(msg.shotId!);
-        } else addTracer(msg.from, msg.to);
-        addImpactSparks(msg.from, msg.to);
+        } else if (msg.weapon !== 'air') addTracer(msg.from, msg.to, msg.weapon === 'iron' ? '#a9b8ff' : msg.weapon === 'pump' ? '#ffb347' : undefined);
+        if (msg.weapon !== 'air') addImpactSparks(msg.from, msg.to);
       }
-      if (msg.shooter === room?.sessionId && msg.hit) flashHit();
     });
-    room.onMessage('damage', (msg: { target: string; amount: number }) => {
+    room.onMessage('damage', (msg: DamageFeedback) => {
       if (msg.target === room?.sessionId) flashDamage();
-      const target = room?.state.players.get(msg.target);
-      if (room?.state.practice && target?.npc && target.side === local.side) {
-        const element = document.createElement('div'); element.textContent = `-${msg.amount}`;
-        element.style.cssText = 'position:fixed;left:0;top:0;color:#ffd24a;font:bold 22px monospace;pointer-events:none;z-index:4';
-        document.body.append(element); damageNumbers.push({ element, position: new THREE.Vector3(target.x, target.y + playerTuning.height, target.z), born: performance.now() });
-      }
+      if (!room || msg.shooter !== room.sessionId) return;
+      flashHit(msg.eliminated);
+      const now = performance.now();
+      if (mergeDamageNumber(damageNumbers, msg, now)) return;
+      const element = document.createElement('div'); element.className = 'floating-damage';
+      document.body.append(element); damageNumbers.push({ ...msg, element, roomId: room.roomId, born: now, updated: now });
+      if (damageNumbers.length > 6) damageNumbers.shift()!.element.remove();
     });
     room.onMessage('pickup', (msg: { player: string; amount: number }) => { if (msg.player === room?.sessionId) { showFeed(`+${msg.amount} solder rounds`); sound(710, .16, 'sine'); } });
     room.onDrop(() => { recordMovement('drop', me?.ack ?? 0); mouseDown = false; pending = []; lastSentInput = null; showFeed('Connection lost · reconnecting'); });
@@ -471,10 +501,42 @@ if (sessionStorage.getItem('pcb-reconnection-token')) void connect('reconnect');
 document.addEventListener('keydown', e => { keys.add(e.code); if (e.code === 'F3') { e.preventDefault(); showDebug = !showDebug; debug.hidden = !showDebug; fpsFrames = 0; fpsStart = performance.now(); } if (e.code === 'F4' && devScaleEnabled && room && !e.repeat) { e.preventDefault(); scalePanel.hidden = !scalePanel.hidden; if (!scalePanel.hidden && document.pointerLockElement === canvas) document.exitPointerLock(); } if (e.code === 'Tab') { e.preventDefault(); el('scoreboard').classList.remove('hidden'); } if (e.code === 'KeyR' && room && !e.repeat) room.send('reload'); });
 document.addEventListener('keyup', e => { keys.delete(e.code); if (e.code === 'Tab') el('scoreboard').classList.add('hidden'); });
 document.addEventListener('mousemove', e => { if (document.pointerLockElement !== canvas) return; yaw -= e.movementX * sensitivity; pitch = Math.max(-1.4, Math.min(1.4, pitch - e.movementY * sensitivity)); });
-canvas.addEventListener('mousedown', e => { if (e.button === 0) { if (document.pointerLockElement !== canvas) canvas.requestPointerLock(); mouseDown = true; } });
-document.addEventListener('mouseup', () => mouseDown = false);
+let adsHeld = false, adsZoom = 0, adsSent = false;
+canvas.addEventListener('contextmenu', e => e.preventDefault());
+canvas.addEventListener('mousedown', e => { if (e.button === 2 && currentWeapon().id === 'sniper' && document.pointerLockElement === canvas) { adsHeld = true; room?.send('weapon:ads', true); adsSent = true; } if (e.button === 0) { if (document.pointerLockElement !== canvas) canvas.requestPointerLock(); mouseDown = true; } });
+canvas.addEventListener('mousedown', e => {
+  if (e.button !== 0 || currentWeapon().id !== 'sniper') return;
+  mouseDown = false;
+  const p = room?.state.players?.get(room.sessionId);
+  if (!p?.alive || p.reloading || !p.ammo || p.transitionCooldown > 0 || boardFlip || document.pointerLockElement !== canvas) return;
+  room!.send('shoot', weaponShot());
+});
+document.addEventListener('mouseup', e => {
+  if (e.button === 2) { adsHeld = false; return; }
+  mouseDown = false;
+  if (specialHeld && currentWeapon().id === 'iron') { room?.send('weapon:trigger', { action: 'release', shot: weaponShot() }); specialHeld = false; fullChargeCue = false; gunView.position.z = -.15; sound(130, .12); }
+  else cancelSpecial();
+});
 document.addEventListener('pointerlockchange', () => { el('pause').classList.toggle('hidden', !room || document.pointerLockElement === canvas); keys.clear(); mouseDown = false; });
 window.addEventListener('blur', () => { keys.clear(); mouseDown = false; });
+window.addEventListener('blur', cancelSpecial);
+document.addEventListener('visibilitychange', () => { if (document.hidden) { mouseDown = false; cancelSpecial(); } });
+document.addEventListener('pointerlockchange', () => { if (document.pointerLockElement !== canvas) cancelSpecial(); });
+document.addEventListener('keydown', e => {
+  if (!room || e.repeat) return;
+  const slot = ['Digit1', 'Digit2', 'Digit3', 'Digit4', 'Digit5'].indexOf(e.code);
+  if (slot >= 0 && room.state.practice) { e.preventDefault(); mouseDown = false; cancelSpecial(); room.send('weapon:select', WEAPON_IDS[slot]); }
+  if (!room.state.practice && e.code === 'KeyQ') { e.preventDefault(); mouseDown = false; cancelSpecial(); room.send('weapon:swap'); }
+  if (!room.state.practice && e.code === 'KeyE' && nearbyWeapon) { e.preventDefault(); mouseDown = false; cancelSpecial(); room.send('weapon:collect', nearbyWeapon); }
+  if (e.code === 'KeyR') { mouseDown = false; cancelSpecial(); }
+});
+// Hold leases and aim updates are independent of rendering FPS.
+setInterval(() => {
+  const p = room?.state.players?.get(room.sessionId);
+  if (!room || !p?.alive || p.reloading || p.transitionCooldown > 0 || document.pointerLockElement !== canvas || !mouseDown) { if (specialHeld) cancelSpecial(); return; }
+  if (p.weapon !== 'iron' && p.weapon !== 'air') return;
+  room.send('weapon:trigger', { action: p.triggerHeld ? 'aim' : 'start', shot: weaponShot() }); specialHeld = true;
+}, 100);
 el('pause').onclick = e => { if ((e.target as HTMLElement).id !== 'leave') canvas.requestPointerLock(); };
 
 let previous = performance.now();
@@ -514,15 +576,18 @@ function frame(now: number) {
   frameTimes.push(elapsedMs); if (frameTimes.length > 2400) frameTimes.splice(0, 1200);
   if (room && snapshot) {
     const me = snapshot.players.get(room.sessionId);
-    if (mouseDown && document.pointerLockElement === canvas && me?.alive && !me.reloading && (local.transitionCooldown ?? 0) === 0 && !boardFlip && me.ammo > 0 && now - lastShot >= WEAPON.fireInterval * 1000) {
+    const config = currentWeapon();
+    if (mouseDown && config.mode !== 'charge' && config.mode !== 'heat' && document.pointerLockElement === canvas && me?.alive && !me.reloading && (Date.now() - (Number.isFinite(serverClockOffsetMs) ? serverClockOffsetMs : 0)) / 1000 >= me.weaponReadyAt && (local.transitionCooldown ?? 0) === 0 && !boardFlip && me.ammo > 0 && now - lastShot >= config.fireInterval * 1000) {
       const shotId = ++nextShotId;
       const shot: ShotInput = { shotId, seq, yaw, pitch, viewTime: lastViewTime || undefined };
-      room.send('shoot', shot); lastShot = now; gunView.position.z = -.09; gunView.rotation.x = .09; muzzle.visible = true; sound(235, .07);
+      room.send('shoot', shot); if (config.id === 'sniper') mouseDown = false; lastShot = now; gunView.position.z = config.id === 'pump' ? -.2 : -.09; gunView.rotation.x = config.id === 'pump' ? .25 : .09; muzzle.visible = true; sound(config.id === 'pump' ? 100 : 235, .07);
       const ray = aimRay(local.x, local.y, local.z, movementYaw(yaw, local), pitch, playerTuning);
       // Immediate full-length preview, without invented impact sparks. The
       // authoritative response reuses and corrects this same tracer.
-      const predicted = hitscan(ray, map, [], room.sessionId, playerTuning, local.side ?? 'front');
-      predictedTracers.set(shotId, addTracer(ray.origin, ray.origin.map((value, i) => value + ray.direction[i] * predicted.distance)));
+      if (config.id === 'solder') {
+        const predicted = hitscan(ray, map, [], room.sessionId, playerTuning, local.side ?? 'front');
+        predictedTracers.set(shotId, addTracer(ray.origin, ray.origin.map((value, i) => value + ray.direction[i] * predicted.distance)));
+      }
     }
     const side = local.side ?? 'front';
     if (!me?.alive) boardFlip = null;
@@ -586,10 +651,33 @@ function frame(now: number) {
     entry.healthBar.quaternion.copy(camera.quaternion);
   }
   for (const [id, helper] of npcHitboxes) if (!room?.state.practice || !remotes.has(id)) { scene.remove(helper); helper.dispose(); npcHitboxes.delete(id); }
-  if (room?.state.practice) {
-    el('timer').textContent = 'PRACTICE';
-    el('player-count').textContent = `5 NPC TARGETS · F5 HITBOXES · F6 ${room.state.npcMovement ? 'FREEZE' : 'RESUME'}`;
-    for (const [id, entry] of remotes) {
+  if (room?.state.players?.get(room.sessionId)) {
+    if (room.state.practice) {
+      el('timer').textContent = 'PRACTICE';
+      el('player-count').textContent = `5 NPC TARGETS · F5 HITBOXES · F6 ${room.state.npcMovement ? 'FREEZE' : 'RESUME'}`;
+    }
+    const p = room.state.players.get(room.sessionId)!;
+    const config = currentWeapon();
+    airCone.visible = p.weapon === 'air' && specialHeld && p.triggerHeld && !p.overheated && !boardFlip;
+    airCone.material.opacity = .10 + Math.sin(now * .025) * .025;
+    const charge = p.chargeStarted ? Math.min(1, Math.max(0, ((Date.now() - (Number.isFinite(serverClockOffsetMs) ? serverClockOffsetMs : 0)) / 1000 - p.chargeStarted) / CHARGE.full)) : 0;
+    if (specialHeld && charge >= 1 && !fullChargeCue) { fullChargeCue = true; sound(1100, .18, 'sine'); }
+    if (!charge) fullChargeCue = false;
+    const recharge = p.sniperReloadAt ? Math.max(0, Math.min(1, 1 - (p.sniperReloadAt - (Date.now() - (Number.isFinite(serverClockOffsetMs) ? serverClockOffsetMs : 0)) / 1000) / 2.5)) : 1;
+    weaponMeter.hidden = p.weapon !== 'iron' && p.weapon !== 'air' && p.weapon !== 'sniper'; weaponMeter.value = p.weapon === 'sniper' ? recharge : p.weapon === 'iron' ? charge : p.heat;
+    weaponMeter.style.accentColor = p.overheated && p.weapon === 'air' ? '#ff544a' : charge >= 1 ? '#88dfff' : '#ffd24a';
+    el('bottom-hud').querySelector('.ammo small')!.textContent = config.name.toUpperCase();
+    el('ammo').textContent = config.id === 'air' ? `${Math.round(p.heat * 100)}%` : String(p.ammo);
+    el('reserve').textContent = config.id === 'air' ? 'HEAT' : String(p.reserve);
+    el('ammo-bar').style.width = `${100 * (config.id === 'air' ? p.heat : p.ammo / config.magazine)}%`;
+    weaponStatus.textContent = `SANDBOX · 1 BLASTER · 2 IRON · 3 HOT AIR · 4 PUMP\n${p.reloading ? 'RELOADING' : p.overheated && p.weapon === 'air' ? 'OVERHEATED — COOLING' : p.weapon === 'iron' ? `CHARGE ${Math.round(charge * 100)}% ${charge >= 1 ? 'READY' : '(hold / release)'}` : p.weapon === 'air' ? `HEAT ${Math.round(p.heat * 100)}%` : ''}`;
+    weaponStatus.style.whiteSpace = 'pre-line';
+    if (room.state.practice) weaponStatus.textContent += '\n5 CAPACITOR SNIPER';
+    const viewScale = .75 * playerTuning.height / 1.8;
+    gunView.scale.setScalar(viewScale);
+    if (!room.state.practice) weaponStatus.textContent = `Q SWAP · E COLLECT\nPRIMARY: BLASTER · SPECIAL: ${p.specialWeapon ? WEAPONS[p.specialWeapon as WeaponId].name.toUpperCase() : 'NONE'}\n${p.reloading ? 'RELOADING' : config.id === 'iron' ? `CHARGE ${Math.round(charge * 100)}%` : config.id === 'air' && p.overheated ? 'OVERHEATED' : ''}`;
+    if (p.weapon === 'sniper') weaponStatus.textContent += `\n${p.reloading ? `RECHARGING ${Math.round(recharge * 100)}%` : 'READY · RIGHT CLICK ADS'} · ${p.ammo}/1`;
+    if (room.state.practice) for (const [id, entry] of remotes) {
       if (!room.state.players.get(id)?.npc) continue;
       let helper = npcHitboxes.get(id);
       if (!helper) { helper = new THREE.Box3Helper(new THREE.Box3(), 0x00ffff); scene.add(helper); npcHitboxes.set(id, helper); }
@@ -598,11 +686,61 @@ function frame(now: number) {
       helper.visible = showNpcHitboxes && entry.mesh.visible;
     }
   }
+  const me = room?.state.players?.get(room.sessionId), equipped = currentWeapon().id;
+  if (!me?.alive || me.reloading || equipped !== 'sniper' || document.pointerLockElement !== canvas || boardFlip) adsHeld = false;
+  if (adsHeld !== adsSent && room) { room.send('weapon:ads', adsHeld); adsSent = adsHeld; }
+  adsZoom = adsHeld ? Math.min(1, adsZoom + dt / .15) : Math.max(0, adsZoom - dt / .15);
+  camera.fov = 2 * Math.atan(Math.tan(78 * Math.PI / 360) / (1 + .75 * adsZoom)) * 180 / Math.PI;
+  camera.updateProjectionMatrix();
+  el('crosshair').classList.toggle('sniper-ads', adsHeld);
+  const animationCharge = me?.chargeStarted ? Math.min(1, Math.max(0, ((Date.now() - (Number.isFinite(serverClockOffsetMs) ? serverClockOffsetMs : 0)) / 1000 - me.chargeStarted) / CHARGE.full)) : 0;
+  for (const [id, model] of weaponModels) animateWeapon(model, { dt, active: id === equipped && !!me?.alive, enabled: !!me?.alive && document.pointerLockElement === canvas && !boardFlip, charge: animationCharge, heat: me?.heat ?? 0, overheated: me?.overheated ?? false, firing: me?.triggerHeld ?? false, reloading: me?.reloading ?? false, moving: keys.has('KeyW') || keys.has('KeyS') || keys.has('KeyA') || keys.has('KeyD'), fireAt: id === visualFireWeapon ? visualFireAt : 0 });
+  const sniperModel = weaponModels.get('sniper')!;
+  if (equipped === 'sniper') {
+    const progress = me?.sniperReloadAt ? Math.max(0, Math.min(1, 1 - (me.sniperReloadAt - (Date.now() - (Number.isFinite(serverClockOffsetMs) ? serverClockOffsetMs : 0)) / 1000) / 2.5)) : 1;
+    sniperModel.chamber.emissiveIntensity = .05 + progress * 3;
+    for (const coil of sniperModel.coils) coil.material.emissiveIntensity = .05 + progress * Math.sin(now * .025) ** 8 * 3 + sniperModel.kick * 8;
+    sniperModel.flash.scale.set(1, 1, 4);
+    sniperModel.plunger.scale.y = Math.max(.01, progress);
+    sniperModel.root.position.x -= adsZoom * .12;
+    sniperModel.root.position.y += adsZoom * .08;
+  }
+  nearbyWeapon = null; pickupPrompt.textContent = '';
+  const presentWeaponPickups = new Set<string>(); let nearest: number = WEAPON_PICKUPS.radius;
+  room?.state.weaponPickups?.forEach((pickup, id) => {
+    presentWeaponPickups.add(id);
+    let mesh = weaponPickupModels.get(id);
+    if (!mesh) {
+      mesh = new THREE.Group(); const miniature = createWeaponModel(pickup.weapon as WeaponId); miniature.root.scale.setScalar(.65); mesh.add(miniature.root); mesh.userData.weaponModel = miniature;
+      const glow = new THREE.Mesh(new THREE.CircleGeometry(.55, 16), new THREE.MeshBasicMaterial({ color: pickup.weapon === 'iron' ? '#9b62ff' : pickup.weapon === 'air' ? '#ff6824' : '#e7ad2b', transparent: true, opacity: .22, depthWrite: false, side: THREE.DoubleSide })); glow.rotation.x = -Math.PI / 2; glow.position.y = -.35; mesh.add(glow);
+      scene.add(mesh); weaponPickupModels.set(id, mesh);
+    }
+    mesh.visible = pickup.active && pickup.side === (local.side ?? 'front') && !boardFlip;
+    mesh.position.set(pickup.x, pickup.y + .7 + Math.sin(now * .002) * .08, pickup.z); mesh.rotation.y = now * .0006;
+    const distance = Math.hypot(local.x - pickup.x, local.z - pickup.z);
+    if (mesh.visible && me?.alive && distance <= nearest && Math.abs(local.y - pickup.y) <= .75) { nearest = distance; nearbyWeapon = { id, version: pickup.version }; pickupPrompt.textContent = `${WEAPONS[pickup.weapon as WeaponId].name.toUpperCase()} — PRESS E TO PICK UP`; }
+  });
+  for (const [id, mesh] of weaponPickupModels) if (!presentWeaponPickups.has(id)) { scene.remove(mesh); disposeWeaponModel(mesh.userData.weaponModel); mesh.traverse(object => { if (object instanceof THREE.Mesh && object.geometry.type === 'CircleGeometry') { object.geometry.dispose(); (object.material as THREE.Material).dispose(); } }); weaponPickupModels.delete(id); }
+  heatParticles.visible = airCone.visible;
+  if (heatParticles.visible) {
+    for (let i = 0; i < 24; i++) {
+      const t = (now * .0015 + i / 24) % 1, distance = t * WEAPONS.air.range;
+      const radius = Math.tan(HEAT.halfAngle) * distance * (.3 + (i % 5) / 7), angle = i * 2.39996;
+      heatPositions[i * 3] = Math.cos(angle) * radius; heatPositions[i * 3 + 1] = Math.sin(angle) * radius; heatPositions[i * 3 + 2] = -distance;
+    }
+    heatGeometry.attributes.position.needsUpdate = true;
+    heatGeometry.computeBoundingSphere();
+  }
   for (let i = damageNumbers.length - 1; i >= 0; i--) {
     const number = damageNumbers[i], age = (now - number.born) / 1000;
-    if (age > 1 || !room?.state.practice) { number.element.remove(); damageNumbers.splice(i, 1); continue; }
-    const projected = number.position.clone().add(new THREE.Vector3(0, age, 0)).project(camera);
-    number.element.style.display = boardFlip || projected.z > 1 ? 'none' : '';
+    if (age > 1 || !room || number.roomId !== room.roomId) { number.element.remove(); damageNumbers.splice(i, 1); continue; }
+    const target = room.state.players.get(number.target), remote = remotes.get(number.target);
+    if (target?.alive && target.side === number.side) { const pos = remote?.mesh.position ?? target; number.x = pos.x; number.y = pos.y; number.z = pos.z; }
+    const head: [number, number, number] = [number.x, number.y + playerTuning.height, number.z];
+    const projected = new THREE.Vector3(...head).add(new THREE.Vector3(0, age, 0)).project(camera);
+    number.element.textContent = `-${Number(number.amount.toFixed(1))}`;
+    number.element.classList.toggle('elimination-damage', number.eliminated);
+    number.element.style.display = boardFlip || target?.side !== number.side || projected.z > 1 || projected.z < -1 || !damageNumberVisible(map, local.side ?? 'front', number.side, [camera.position.x, camera.position.y, camera.position.z], head) ? 'none' : '';
     number.element.style.transform = `translate(${(projected.x + 1) * innerWidth / 2}px,${(1 - projected.y) * innerHeight / 2}px)`;
     number.element.style.opacity = String(1 - age);
   }

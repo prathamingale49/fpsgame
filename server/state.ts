@@ -3,11 +3,16 @@ import { schema, t, type SchemaType } from '@colyseus/schema';
 export const PlayerState = schema({
   name: t.string().default('Engineer'),
   npc: t.boolean().default(false),
+  weapon: t.string().default('solder'), specialWeapon: t.string().default(''),
+  heat: t.float32().default(0), overheated: t.boolean().default(false),
+  chargeStarted: t.float64().default(0), weaponReadyAt: t.float64().default(0),
+  triggerHeld: t.boolean().default(false),
+  ads: t.boolean().default(false), sniperReloadAt: t.float64().default(0),
   side: t.string().default('front'), transitionCooldown: t.float32().default(0), flipCooldown: t.float32().default(0), headingOffset: t.float32().default(0),
   x: t.float32().default(0), y: t.float32().default(0), z: t.float32().default(0),
   vy: t.float32().default(0), grounded: t.boolean().default(true), jumpHeld: t.boolean().default(false), mantleTarget: t.float32().default(0),
   yaw: t.float32().default(0), pitch: t.float32().default(0),
-  hp: t.uint8().default(100), ammo: t.uint8().default(30), reserve: t.uint16().default(60),
+  hp: t.float32().default(100), ammo: t.uint8().default(30), reserve: t.uint16().default(60),
   kills: t.uint16().default(0), deaths: t.uint16().default(0),
   alive: t.boolean().default(true), reloading: t.boolean().default(false),
   ack: t.uint32().default(0), connected: t.boolean().default(true),
@@ -15,10 +20,12 @@ export const PlayerState = schema({
 export type PlayerState = SchemaType<typeof PlayerState>;
 export const PickupState = schema({ x: t.float32(), y: t.float32(), z: t.float32(), side: t.string().default('front'), active: t.boolean().default(true) }, 'PickupState');
 export type PickupState = SchemaType<typeof PickupState>;
+export const WeaponPickupState = schema({ x: t.float32(), y: t.float32(), z: t.float32(), side: t.string(), weapon: t.string(), active: t.boolean().default(true), version: t.uint32().default(0), dropped: t.boolean().default(false) }, 'WeaponPickupState');
 
 export const MatchState = schema({
   players: t.map(PlayerState),
   practice: t.boolean().default(false), npcMovement: t.boolean().default(true),
+  weaponPickups: t.map(WeaponPickupState),
   pickups: t.map(PickupState),
   phase: t.string().default('waiting'),
   seconds: t.uint16().default(300),

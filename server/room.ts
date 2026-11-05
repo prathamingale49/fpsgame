@@ -1,6 +1,8 @@
 import { KillChain } from './kill-chain.js';
 import { Room, type Client } from 'colyseus';
-import { MatchState, PlayerState, PickupState } from './state.js';
+import { MatchState, PlayerState, PickupState, WeaponPickupState } from './state.js';
+import { WEAPONS, validWeaponId, ironDamage, sniperAim, pumpRays, weaponHits, weaponKillMessage, HEAT, type WeaponId } from '../shared/weapons.js';
+import { weaponPickupLocations, droppedWeaponPosition, canCollectWeapon, WEAPON_PICKUPS } from '../shared/weapon-pickups.js';
 import { aimRay, movementYaw, collisionCacheStats, hitscan, initialMotion, samplePosition, stepMotion, testMap, TICK, MOVEMENT_PROTOCOL, MATCH_SECONDS, RESPAWN_SECONDS, PLAYER, WEAPON, COMBAT, tuningForHeight, validDevHeight, validInput, validShotInput, type Input, type ShotInput, type PositionSample, type MapData, type Motion, type PlayerTuning, type BoardSide } from '../shared/game.js';
 const PLAYER_PICKUP_DISTANCE = .9;
 const TRACE_MOVEMENT = process.env.PCB_MOVEMENT_TRACE === '1';
@@ -15,7 +17,31 @@ export function safeName(value: unknown): string {
 }
 
 export class GameRoom extends Room {
+  private weapons = new Map<string, { held: boolean; lease: number; shot?: ShotInput; pulse: number; heatAt: number; stocks: Map<WeaponId, { ammo: number; reserve: number }> }>();
+  private weaponControl(id: string) {
+    let control = this.weapons.get(id);
+    if (!control) { control = { held: false, lease: 0, pulse: 0, heatAt: Date.now() / 1000, stocks: new Map() }; this.weapons.set(id, control); }
+    return control;
+  }
+  private cancelWeapon(id: string) { const p = this.state.players.get(id); if (p) { p.chargeStarted = 0; p.triggerHeld = false; } const c = this.weapons.get(id); if (c) { c.held = false; c.shot = undefined; } }
   practice: boolean = false;
+  private weaponRespawns = new Map<string, number>();
+  private drops = new Map<string, { owner: string; unlockAt: number; expiresAt: number; ammo: number; reserve: number; reloadAt: number; heat: number; overheated: boolean; readyAt: number }>();
+  private nextDrop = 0;
+  private dropSpecial(id: string): boolean {
+    const p = this.state.players.get(id), r = this.runtime.get(id);
+    if (this.practice || !p || !r || !validWeaponId(p.specialWeapon) || p.specialWeapon === 'solder') return true;
+    const point = droppedWeaponPosition(p, activeMap); if (!point) return false;
+    const weapon = p.specialWeapon, c = this.weaponControl(id), config = WEAPONS[weapon];
+    const stock = p.weapon === weapon ? { ammo: p.ammo, reserve: p.reserve } : c.stocks.get(weapon) ?? { ammo: config.magazine, reserve: config.reserve };
+    const reloadAt = weapon === 'sniper' ? p.sniperReloadAt : p.weapon === weapon && p.reloading ? r.reloadAt : 0;
+    const now = Date.now() / 1000, dropId = `drop-${++this.nextDrop}`;
+    this.drops.set(dropId, { owner: id, unlockAt: now + .75, expiresAt: now + Number(process.env.PCB_TEST_DROP_SECONDS || 30), ...stock, reloadAt, heat: p.heat, overheated: p.overheated, readyAt: p.weaponReadyAt });
+    this.state.weaponPickups.set(dropId, new WeaponPickupState({ ...point, weapon, dropped: true }));
+    if (p.weapon !== 'solder') this.equipWeapon(id, 'solder');
+    c.stocks.delete(weapon); p.specialWeapon = ''; p.sniperReloadAt = 0;
+    return true;
+  }
   private bots = new Map<string, { mode: number; next: number; yaw: number; moving: boolean; sprint: boolean }>();
   maxClients = 8;
   state = new MatchState();
@@ -33,6 +59,8 @@ export class GameRoom extends Room {
 
   onCreate() {
     this.state.practice = this.practice;
+
+    if (!this.practice) weaponPickupLocations(activeMap, Math.floor(Math.random() * 0xffffffff)).forEach((point, index) => this.state.weaponPickups.set(String(index), new WeaponPickupState({ ...point, weapon: index >= 9 ? 'sniper' : (['iron', 'air', 'pump'] as const)[index % 3] })));
     if (this.practice) { this.maxClients = 1; void this.setPrivate(true); }
     this.onMessage('practice:movement', () => { if (this.practice) this.state.npcMovement = !this.state.npcMovement; });
     this.roomId = Math.random().toString(36).slice(2, 8).toUpperCase();
@@ -60,6 +88,66 @@ export class GameRoom extends Room {
       } else if (TRACE_MOVEMENT) console.log('MOVE_TRACE', JSON.stringify({ event: 'reject', player: client.sessionId, seq: payload.seq, lastReceived: r?.lastReceived, ack: r?.lastSeq }));
     });
     this.onMessage('shoot', (client, payload: unknown) => this.shoot(client, payload));
+    this.onMessage('weapon:select', (client, value: unknown) => {
+      const p = this.state.players.get(client.sessionId), r = this.runtime.get(client.sessionId);
+      if (!this.practice || !p?.alive || p.npc || !r || !validWeaponId(value) || value === p.weapon) return;
+      this.equipWeapon(client.sessionId, value);
+    });
+    this.onMessage('weapon:swap', client => {
+      const p = this.state.players.get(client.sessionId);
+      if (!this.practice && p?.alive && p.specialWeapon) this.equipWeapon(client.sessionId, (p.weapon === 'solder' ? p.specialWeapon : 'solder') as WeaponId);
+    });
+    this.onMessage('weapon:collect', (client, value: unknown) => {
+      if (this.practice || !value || typeof value !== 'object') return;
+      const request = value as { id?: unknown; version?: unknown }, p = this.state.players.get(client.sessionId);
+      if (typeof request.id !== 'string' || !Number.isSafeInteger(request.version) || !p || p.npc || p.transitionCooldown > 0) return;
+      const pickup = this.state.weaponPickups.get(request.id);
+      if (!pickup || pickup.version !== request.version || !canCollectWeapon(p, pickup, activeMap) || p.specialWeapon === pickup.weapon) return;
+      const now = Date.now() / 1000, drop = this.drops.get(request.id);
+      if (pickup.dropped && (!drop || now >= drop.expiresAt || drop.owner === client.sessionId && now < drop.unlockAt)) return;
+      if (!this.dropSpecial(client.sessionId)) return;
+      p.sniperReloadAt = 0;
+      if (p.weapon !== 'solder') this.equipWeapon(client.sessionId, 'solder');
+      p.specialWeapon = pickup.weapon;
+      if (drop) this.weaponControl(client.sessionId).stocks.set(pickup.weapon as WeaponId, { ammo: drop.ammo, reserve: drop.reserve });
+      this.equipWeapon(client.sessionId, pickup.weapon as WeaponId);
+      if (drop) {
+        p.heat = drop.heat; p.overheated = drop.overheated; p.weaponReadyAt = Math.max(p.weaponReadyAt, drop.readyAt);
+        if (drop.reloadAt > now) { p.reloading = true; this.runtime.get(client.sessionId)!.reloadAt = drop.reloadAt; if (p.weapon === 'sniper') p.sniperReloadAt = drop.reloadAt; }
+        else if (drop.reloadAt > 0) {
+          const count = Math.min(WEAPONS[p.weapon as WeaponId].magazine - p.ammo, p.reserve);
+          p.ammo += count; p.reserve -= count; if (p.weapon === 'sniper') p.reserve = 1;
+        }
+      }
+      pickup.active = false; pickup.version++;
+      if (pickup.dropped) { this.state.weaponPickups.delete(request.id); this.drops.delete(request.id); }
+      else this.weaponRespawns.set(request.id, now + Number(process.env.PCB_TEST_WEAPON_PICKUP_SECONDS || WEAPON_PICKUPS.respawnSeconds));
+      this.broadcast('feed', { text: `${p.name} collected ${WEAPONS[pickup.weapon as WeaponId].name}` });
+    });
+    this.onMessage('weapon:trigger', (client, value: unknown) => {
+      if (!value || typeof value !== 'object') return;
+      const action = (value as { action?: unknown }).action, shot = (value as { shot?: unknown }).shot;
+      const p = this.state.players.get(client.sessionId);
+      if (!p || p.npc) return;
+      if (action === 'cancel') { this.cancelWeapon(client.sessionId); return; }
+      if (!validShotInput(shot)) return;
+      const c = this.weaponControl(client.sessionId), now = Date.now() / 1000;
+      if (!p.alive || !p.connected || p.reloading || p.transitionCooldown > 0) { this.cancelWeapon(client.sessionId); return; }
+      if (action === 'start' && !c.held && now >= p.weaponReadyAt && (p.weapon === 'iron' || p.weapon === 'air')) {
+        c.held = true; p.triggerHeld = true; c.lease = now; c.shot = shot;
+        if (p.weapon === 'iron') p.chargeStarted = now;
+      } else if (action === 'aim' && c.held) { c.lease = now; c.shot = shot; }
+      else if (action === 'release') {
+        if (!c.held || p.chargeStarted <= 0 || now - c.lease > HEAT.lease) { this.cancelWeapon(client.sessionId); return; }
+        const duration = p.chargeStarted > 0 && c.held && now - c.lease <= HEAT.lease ? now - p.chargeStarted : 0;
+        this.cancelWeapon(client.sessionId);
+        if (p.weapon === 'iron' && ironDamage(duration) > 0) this.fire(client.sessionId, shot, duration);
+      }
+    });
+    this.onMessage('weapon:ads', (client, value: unknown) => {
+      const p = this.state.players.get(client.sessionId);
+      if (p) p.ads = value === true && p.alive && p.connected && p.weapon === 'sniper' && !p.reloading && p.transitionCooldown <= 0;
+    });
     this.onMessage('reload', (client) => this.reload(client.sessionId));
     this.onMessage('dev:scale', (client, payload: unknown) => {
       if (!DEV_SCALE_ENABLED || !this.runtime.has(client.sessionId)) return;
@@ -91,6 +179,7 @@ export class GameRoom extends Room {
   }
 
   onDrop(client: Client) {
+    this.cancelWeapon(client.sessionId);
     this.killChain.reset(client.sessionId);
     if (TRACE_MOVEMENT) console.log('MOVE_TRACE', JSON.stringify({ event: 'drop', player: client.sessionId }));
     const p = this.state.players.get(client.sessionId);
@@ -111,6 +200,7 @@ export class GameRoom extends Room {
     if (p) this.broadcast('feed', { text: `${p.name} disconnected` });
     this.state.players.delete(client.sessionId);
     this.runtime.delete(client.sessionId);
+    this.weapons.delete(client.sessionId);
     this.hitHistory.delete(client.sessionId);
     if (!this.practice && this.state.players.size < 2 && this.state.phase === 'playing') this.state.phase = 'waiting';
   }
@@ -118,6 +208,10 @@ export class GameRoom extends Room {
   private startMatch() {
     this.killChain.clear();
     this.hitHistory.clear();
+    this.weapons.clear();
+    this.drops.clear();
+    this.state.weaponPickups.forEach((pickup, id) => { if (pickup.dropped) this.state.weaponPickups.delete(id); else { pickup.active = true; pickup.version++; } });
+    this.weaponRespawns.clear();
     this.elapsed = 0; this.state.seconds = this.matchSeconds; this.state.winner = ''; this.state.phase = 'playing';
     this.state.players.forEach((p) => {
       if (Math.abs(p.x) >= activeMap.width / 2 || Math.abs(p.z) >= activeMap.depth / 2 || p.y < activeMap.ground - 1) {
@@ -125,7 +219,8 @@ export class GameRoom extends Room {
         p.x = motion.x; p.y = motion.y; p.z = motion.z; p.vy = motion.vy; p.grounded = true;
         p.side = 'front'; p.transitionCooldown = 0; p.flipCooldown = 0; p.headingOffset = 0;
       }
-      p.jumpHeld = false; p.mantleTarget = 0;
+      p.jumpHeld = false; p.mantleTarget = 0; p.sniperReloadAt = 0; p.ads = false;
+      p.weapon = 'solder'; p.specialWeapon = ''; p.heat = 0; p.overheated = false; p.triggerHeld = false; p.chargeStarted = 0; p.weaponReadyAt = 0;
       p.kills = 0; p.deaths = 0; p.hp = 100; p.alive = true; p.ammo = WEAPON.magazine; p.reserve = WEAPON.reserve; p.reloading = false;
     });
     this.runtime.forEach((r, id) => { r.queue.clear(); r.credit = 0; r.lastSeq = r.lastReceived; r.lastShot = -Infinity; r.lastShotId = -1; r.reloadAt = 0; const p = this.state.players.get(id); if (p) p.ack = r.lastSeq; });
@@ -136,6 +231,8 @@ export class GameRoom extends Room {
   private tick() {
     const workStart = performance.now();
     const now = Date.now() / 1000;
+    for (const [id, at] of this.weaponRespawns) if (now >= at) { const pickup = this.state.weaponPickups.get(id); if (pickup) pickup.active = true; this.weaponRespawns.delete(id); }
+    for (const [id, drop] of this.drops) if (now >= drop.expiresAt) { this.state.weaponPickups.delete(id); this.drops.delete(id); }
     const tickAt = performance.now();
     const elapsed = Math.max(0, Math.min((tickAt - this.lastTickAt) / 1000, 1));
     this.lastTickAt = tickAt;
@@ -154,9 +251,23 @@ export class GameRoom extends Room {
     }
     this.state.players.forEach((p, id) => {
       const r = this.runtime.get(id); if (!r) return;
+      if (!p.npc) {
+        const c = this.weaponControl(id);
+        if (c.held && (now - c.lease > HEAT.lease || !p.alive || !p.connected || p.reloading || p.transitionCooldown > 0)) this.cancelWeapon(id);
+        if (!c.held || p.weapon !== 'air' || p.overheated) p.heat = Math.max(0, p.heat - (now - c.heatAt) / HEAT.cooling);
+        c.heatAt = now; if (p.overheated && p.heat <= .001) { p.heat = 0; p.overheated = false; }
+        if (p.weapon === 'air' && c.held && !p.overheated && now - c.pulse >= HEAT.pulse) {
+          c.pulse = now; this.fire(id, c.shot, undefined, true);
+        }
+      }
       if (!p.alive) { if (now >= r.respawnAt && this.state.phase !== 'ended') this.respawn(id); return; }
-      if (p.reloading && now >= r.reloadAt) {
-        const count = Math.min(WEAPON.magazine - p.ammo, p.reserve);
+      if (p.sniperReloadAt > 0 && now >= p.sniperReloadAt) {
+        p.sniperReloadAt = 0;
+        if (p.weapon === 'sniper') { p.ammo = 1; p.reserve = 1; p.reloading = false; }
+        else this.weaponControl(id).stocks.set('sniper', { ammo: 1, reserve: 1 });
+      }
+      if (p.reloading && p.weapon !== 'sniper' && now >= r.reloadAt) {
+        const count = Math.min(WEAPONS[p.weapon as WeaponId].magazine - p.ammo, p.reserve);
         p.ammo += count; p.reserve -= count; p.reloading = false;
       }
       if (!p.connected) return;
@@ -188,7 +299,7 @@ export class GameRoom extends Room {
       serverPerf.queueTotal += r.queue.size;
       if (!r.queue.size) r.credit = Math.min(r.credit, 6);
       if (!p.alive) return;
-      if (p.reserve < WEAPON.maxReserve) this.state.pickups.forEach((pickup, pickupId) => {
+      if (p.weapon === 'solder' && p.reserve < WEAPON.maxReserve) this.state.pickups.forEach((pickup, pickupId) => {
         if (pickup.side !== p.side || !pickup.active || Math.hypot(p.x - pickup.x, p.z - pickup.z) > PLAYER_PICKUP_DISTANCE * this.playerTuning.height / PLAYER.height || Math.abs(p.y - pickup.y) > 1.5 * this.playerTuning.height / PLAYER.height) return;
         p.reserve = Math.min(WEAPON.maxReserve, p.reserve + WEAPON.pickupRounds);
         pickup.active = false; this.pickupRespawns.set(pickupId, now + this.pickupSeconds);
@@ -203,14 +314,18 @@ export class GameRoom extends Room {
 
   private reload(id: string) {
     const p = this.state.players.get(id), r = this.runtime.get(id);
-    if (!p || !r || !p.alive || p.reloading || p.ammo === WEAPON.magazine || p.reserve === 0) return;
-    p.reloading = true; r.reloadAt = Date.now() / 1000 + WEAPON.reloadSeconds;
+    this.cancelWeapon(id);
+    if (!p || !r || !p.alive || p.reloading || p.weapon === 'air' || p.ammo === WEAPONS[p.weapon as WeaponId].magazine || p.reserve === 0) return;
+    p.reloading = true; p.ads = false; r.reloadAt = Date.now() / 1000 + WEAPONS[p.weapon as WeaponId].reloadSeconds;
+    if (p.weapon === 'sniper' && !p.sniperReloadAt) p.sniperReloadAt = r.reloadAt;
   }
 
   private fall(id: string, now: number) {
     const p = this.state.players.get(id), r = this.runtime.get(id);
     if (!p || !r || !p.alive) return;
-    p.hp = 0; p.alive = false; p.deaths++; p.reloading = false; p.mantleTarget = 0;
+    this.dropSpecial(id);
+    p.hp = 0; p.alive = false; p.deaths++; p.reloading = false; p.mantleTarget = 0; p.ads = false; p.sniperReloadAt = 0;
+    this.cancelWeapon(id);
     r.respawnAt = now + RESPAWN_SECONDS;
     this.hitHistory.delete(id);
     r.queue.clear(); r.credit = 0; r.lastSeq = r.lastReceived; p.ack = r.lastSeq;
@@ -228,40 +343,65 @@ export class GameRoom extends Room {
   }
 
   private shoot(client: Client, payload: unknown) {
-    const id = client.sessionId, p = this.state.players.get(id), r = this.runtime.get(id);
+    this.fire(client.sessionId, payload);
+  }
+  private fire(id: string, payload: unknown, charge?: number, heatPulse = false) {
+    const p = this.state.players.get(id), r = this.runtime.get(id);
     const nowMs = Date.now(), now = nowMs / 1000;
     // Legacy empty shot messages remain valid for test clients; browser clients
     // send their instantaneous aim and the timestamp of what they actually saw.
     if (payload !== undefined && payload !== null && !validShotInput(payload)) return;
     const shot: ShotInput | undefined = payload === undefined || payload === null ? undefined : payload as ShotInput;
-    if (!p || p.npc || !r || !p.alive || !p.connected || this.state.phase !== 'playing' || p.reloading || p.transitionCooldown > 0 || now - r.lastShot < WEAPON.fireInterval) return;
-    if (shot && (shot.shotId <= r.lastShotId || shot.seq > r.lastReceived + 1 || shot.seq < r.lastSeq - 120)) return;
-    if (p.ammo <= 0) { this.reload(id); return; }
+    if (!p || p.npc || !r || !p.alive || !p.connected || this.state.phase !== 'playing' || p.reloading || p.transitionCooldown > 0) return;
+    const config = WEAPONS[p.weapon as WeaponId];
+    if ((p.weapon === 'iron' && charge === undefined) || (p.weapon === 'air' && !heatPulse)) return;
+    if (now - r.lastShot < config.fireInterval || now < p.weaponReadyAt) return;
+    if (shot && ((!heatPulse && shot.shotId <= r.lastShotId) || shot.seq > r.lastReceived + 1 || shot.seq < r.lastSeq - 120)) return;
+    if (p.weapon !== 'air' && p.ammo <= 0) { this.reload(id); return; }
     if (shot) r.lastShotId = shot.shotId;
-    r.lastShot = now; p.ammo--;
-    const ray = aimRay(p.x, p.y, p.z, movementYaw(shot?.yaw ?? p.yaw, p as unknown as Motion), shot?.pitch ?? p.pitch, this.playerTuning);
+    r.lastShot = now; p.weaponReadyAt = now + config.fireInterval;
+    if (p.weapon === 'air') { p.heat = Math.min(1, p.heat + HEAT.pulse / HEAT.duration); if (p.heat >= .999) p.overheated = true; }
+    else p.ammo--;
+    const baseYaw = movementYaw(shot?.yaw ?? p.yaw, p as unknown as Motion), basePitch = shot?.pitch ?? p.pitch;
+    const [shotYaw, shotPitch] = p.weapon === 'sniper' ? sniperAim(baseYaw, basePitch, p.ads) : [baseYaw, basePitch];
+    const ray = aimRay(p.x, p.y, p.z, shotYaw, shotPitch, this.playerTuning);
     const viewTime = shot?.viewTime === undefined ? nowMs : Math.min(nowMs, Math.max(nowMs - COMBAT.maxRewindMs, shot.viewTime));
     const opponents = [...this.state.players.entries()].filter(([otherId, other]) => otherId !== id && other.alive && other.connected && other.side === p.side).map(([otherId, other]) => {
-      const historical = samplePosition(this.hitHistory.get(otherId) ?? [], viewTime);
+      const historical = p.weapon === 'air' ? undefined : samplePosition(this.hitHistory.get(otherId) ?? [], viewTime);
       const position = historical?.side === other.side ? historical : other;
       return [otherId, { x: position.x, y: position.y, z: position.z, side: other.side } as Motion] as [string, Motion];
     });
+    if (p.weapon !== 'solder') {
+      const rays = p.weapon === 'pump' ? pumpRays(p.x, p.y, p.z, movementYaw(shot?.yaw ?? p.yaw, p as unknown as Motion), shot?.pitch ?? p.pitch, this.playerTuning) : [ray];
+      const result = weaponHits(p.weapon as WeaponId, ray, rays, activeMap, opponents, id, this.playerTuning, p.side as BoardSide, p.weapon === 'iron' ? ironDamage(charge!) : config.damage);
+      for (const trace of result.traces) this.broadcast('shot', { shooter: id, side: p.side, weapon: p.weapon, ...trace });
+      for (const [target, amount] of result.hits) this.damage(id, target, amount, now);
+      if (p.weapon !== 'air' && p.ammo === 0 && p.reserve > 0) this.reload(id);
+      return;
+    }
     const result = hitscan(ray, activeMap, opponents, id, this.playerTuning, p.side as BoardSide);
     const end = ray.origin.map((v, i) => v + ray.direction[i] * result.distance);
     this.broadcast('shot', { shooter: id, shotId: shot?.shotId, side: p.side, from: ray.origin, to: end, hit: result.target });
     if (p.ammo === 0 && p.reserve > 0) this.reload(id);
     if (!result.target) return;
-    const target = this.state.players.get(result.target); if (!target) return;
-    target.hp = Math.max(0, target.hp - WEAPON.damage);
-    this.broadcast('damage', { target: result.target, shooter: id, amount: WEAPON.damage });
+    this.damage(id, result.target, WEAPON.damage, now);
+  }
+  private damage(id: string, targetId: string, amount: number, now: number) {
+    const p = this.state.players.get(id), target = this.state.players.get(targetId); if (!p || !target || !target.alive) return;
+    target.hp = Math.max(0, target.hp - amount);
+    const feedback = { target: targetId, shooter: id, amount, eliminated: target.hp === 0, side: target.side, x: target.x, y: target.y, z: target.z };
+    // Victim needs the damage flash; only the attacker needs hit/number feedback.
+    for (const client of this.clients) if (client.sessionId === id || client.sessionId === targetId) client.send('damage', feedback);
     if (target.hp === 0) {
-      target.alive = false; target.deaths++; p.kills++;
-      this.killChain.reset(result.target);
-      const chain = this.killChain.record(id, nowMs);
-      client.send('elimination', { target: result.target, name: target.name, chain });
-      this.hitHistory.delete(result.target);
-      const targetRuntime = this.runtime.get(result.target); if (targetRuntime) targetRuntime.respawnAt = now + (target.npc ? 3 : RESPAWN_SECONDS);
-      this.broadcast('feed', { text: `${p.name} eliminated ${target.name}`, chain });
+      this.dropSpecial(targetId);
+      target.alive = false; target.deaths++; p.kills++; target.ads = false; target.sniperReloadAt = 0;
+      this.cancelWeapon(targetId);
+      this.hitHistory.delete(targetId);
+      const targetRuntime = this.runtime.get(targetId); if (targetRuntime) targetRuntime.respawnAt = now + (target.npc ? 3 : RESPAWN_SECONDS);
+      this.killChain.reset(targetId);
+      const chain = this.killChain.record(id, now * 1000);
+      this.clients.find(client => client.sessionId === id)?.send('elimination', { target: targetId, name: target.name, chain });
+      this.broadcast('feed', { text: weaponKillMessage(p.weapon as WeaponId, p.name, target.name), chain });
     }
   }
 
@@ -273,6 +413,7 @@ export class GameRoom extends Room {
     const m = initialMotion(spawn);
     p.x = m.x; p.y = m.y; p.z = m.z; p.vy = 0; p.grounded = true; p.jumpHeld = false; p.mantleTarget = 0;
     p.side = 'front'; p.transitionCooldown = 0; p.flipCooldown = 0; p.headingOffset = 0;
+    this.cancelWeapon(id); this.weapons.delete(id); p.weapon = 'solder'; p.specialWeapon = ''; p.heat = 0; p.overheated = false; p.weaponReadyAt = 0; p.sniperReloadAt = 0; p.ads = false;
     p.hp = 100; p.alive = true; p.ammo = WEAPON.magazine; p.reserve = WEAPON.reserve; p.reloading = false;
     const r = this.runtime.get(id); if (r) { r.queue.clear(); r.credit = 0; r.lastSeq = r.lastReceived; p.ack = r.lastSeq; }
     this.broadcast('feed', { text: `${p.name} respawned` });
@@ -306,7 +447,16 @@ export class GameRoom extends Room {
       this.runtime.set(id, { queue: new Map(), lastReceived: 0, lastSeq: 0, credit: 0, lastShot: -Infinity, lastShotId: -1, reloadAt: 0, respawnAt: 0 });
     }
   }
-  onDispose() { this.bots.clear(); this.runtime.clear(); this.hitHistory.clear(); }
+  private equipWeapon(id: string, value: WeaponId) {
+    const p = this.state.players.get(id), r = this.runtime.get(id); if (!p?.alive || !r) return;
+    const c = this.weaponControl(id); c.stocks.set(p.weapon as WeaponId, { ammo: p.ammo, reserve: p.reserve });
+    this.cancelWeapon(id); p.reloading = false; p.ads = false; r.reloadAt = 0;
+    const config = WEAPONS[value], stock = c.stocks.get(value) ?? { ammo: config.magazine, reserve: config.reserve };
+    p.weapon = value; if (this.practice) p.specialWeapon = value === 'solder' ? '' : value;
+    p.ammo = stock.ammo; p.reserve = stock.reserve; p.weaponReadyAt = Math.max(p.weaponReadyAt, r.lastShot + config.fireInterval);
+    if (value === 'sniper' && p.sniperReloadAt > 0) { p.ammo = 0; p.reloading = true; r.reloadAt = p.sniperReloadAt; }
+  }
+  onDispose() { this.drops.clear(); this.weaponRespawns.clear(); this.weapons.clear(); this.bots.clear(); this.runtime.clear(); this.hitHistory.clear(); }
 }
 
 export class PracticeRoom extends GameRoom { practice = true; }

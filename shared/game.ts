@@ -1,5 +1,5 @@
 export const TICK = 1 / 60;
-export const MOVEMENT_PROTOCOL = 6;
+export const MOVEMENT_PROTOCOL = 7;
 export const EDGE_FLIP_SECONDS = .9;
 export const FLIP_COOLDOWN_SECONDS = 5;
 export const MATCH_SECONDS = 300;
@@ -237,8 +237,8 @@ export type Ray = { origin: [number, number, number]; direction: [number, number
 export function aimRay(x: number, y: number, z: number, yaw: number, pitch: number, tuning: PlayerTuning = PLAYER): Ray {
   return { origin: [x, y + tuning.eye, z], direction: [-Math.sin(yaw) * Math.cos(pitch), Math.sin(pitch), -Math.cos(yaw) * Math.cos(pitch)] };
 }
-export function rayBox(ray: Ray, box: Box): number {
-  let lo = 0, hi: number = WEAPON.range;
+export function rayBox(ray: Ray, box: Box, range: number = WEAPON.range): number {
+  let lo = 0, hi: number = range;
   for (let i = 0; i < 3; i++) {
     const d = ray.direction[i], o = ray.origin[i];
     if (Math.abs(d) < 1e-8) { if (o < box.min[i] || o > box.max[i]) return Infinity; continue; }
@@ -249,19 +249,19 @@ export function rayBox(ray: Ray, box: Box): number {
   }
   return lo;
 }
-export function rayPlayer(ray: Ray, player: Motion, tuning: PlayerTuning = PLAYER): number {
+export function rayPlayer(ray: Ray, player: Motion, tuning: PlayerTuning = PLAYER, range: number = WEAPON.range): number {
   const radius = tuning.radius * COMBAT.hitRadiusScale;
   const excessHeight = tuning.height * (COMBAT.hitHeightScale - 1);
   const box: Box = { min: [player.x - radius, player.y - excessHeight / 2, player.z - radius], max: [player.x + radius, player.y + tuning.height + excessHeight / 2, player.z + radius] };
-  return rayBox(ray, box);
+  return rayBox(ray, box, range);
 }
-export function hitscan(ray: Ray, map: MapData, players: Iterable<[string, Motion]>, shooterId: string, tuning: PlayerTuning = PLAYER, side: BoardSide = 'front'): { target?: string; distance: number } {
+export function hitscan(ray: Ray, map: MapData, players: Iterable<[string, Motion]>, shooterId: string, tuning: PlayerTuning = PLAYER, side: BoardSide = 'front', range: number = WEAPON.range): { target?: string; distance: number } {
   map = surfaceMap(map, side);
-  let distance: number = WEAPON.range, target: string | undefined;
-  for (const box of map.boxes) distance = Math.min(distance, rayBox(ray, box));
+  let distance: number = range, target: string | undefined;
+  for (const box of map.boxes) distance = Math.min(distance, rayBox(ray, box, range));
   for (const [id, player] of players) {
     if (id === shooterId || (player.side ?? 'front') !== side) continue;
-    const hit = rayPlayer(ray, player, tuning);
+    const hit = rayPlayer(ray, player, tuning, range);
     if (hit < distance) { distance = hit; target = id; }
   }
   return { target, distance };

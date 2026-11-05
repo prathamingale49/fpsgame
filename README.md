@@ -1,11 +1,10 @@
 # YJSPS
 
-YJSP + FPS: **YJS** in white, **PS** in gold. Click **SOLO PRACTICE** to start
-a private, untimed session with five rocket targets: one stationary, two walking,
-and two dynamic. Targets use the normal server shooting rules and respawn after
-three seconds. F5 toggles cyan shooting hitboxes; F6 freezes/resumes NPCs.
-Damage numbers and overhead health bars show confirmed hits. Exit to the menu
-to play regular multiplayer. Practice rooms never enter public matchmaking.
+Solo Practice is an unrestricted weapon sandbox with all four guns available using **1–4**. It has five rocket targets and remains private and untimed. **R** reloads; **F5** toggles target hitboxes and **F6** freezes NPCs.
+
+Normal multiplayer starts every player with the **Solder Blaster** and randomly spawns nine special weapon pickups (three Precision Irons, three Hot Air Rework Guns, and three Desoldering Pumps) across clear, accessible areas of the PCB. The pickups are spread apart rather than clustered, including both PCB surfaces. Press **E** near a floating pickup to collect or replace the one carried special weapon; press **Q** to swap between the permanent Blaster and that special. Pickups respawn after 15 seconds, and death clears the carried special. Weapon locations vary between matches/rooms.
+
+The four weapons have distinct procedural models and animations: Blaster recoil/heated barrel, charged Iron pullback and violet coils, Hot Air turbine/heat glow, and Pump plunger action. Iron charges while held; Hot Air uses a short-range cone and can overheat; Pump fires eight pellets. Weapon selection, damage, charges, cooling, cooldowns, reloads, and pickups are server-validated for multiplayer. Weapon animation does not alter bullet aim.
 
 Browser first-person deathmatch on a real YJSP Battery Management System (BMS) PCB. The frontend uses Three.js and Vite; a Colyseus/Node.js server owns player movement, collisions, weapons, and multiplayer game state.
 
