@@ -1,0 +1,49 @@
+import { chromium } from 'playwright';
+import { spawn } from 'node:child_process';
+import { setTimeout as delay } from 'node:timers/promises';
+import fs from 'node:fs';
+const port = 26703, base = `http://localhost:${port}`;
+const server = spawn(process.execPath, ['dist-server/main.js'], { env: { ...process.env, PORT: String(port) }, stdio: 'ignore' });
+const browser = await chromium.launch({ headless: true, executablePath: 'C:/Program Files/Google/Chrome/Application/chrome.exe' });
+try {
+  for (let i = 0; i < 100; i++) { try { if ((await fetch(`${base}/api/health`)).ok) break; } catch {} await delay(100); }
+  const page = await browser.newPage({ viewport: { width: 1100, height: 750 } });
+  await page.addInitScript(() => localStorage.setItem('pcb-quality', 'low'));
+  const errors: string[] = []; page.on('pageerror', e => errors.push(e.message));
+  await page.goto(base); await page.locator('#practice').click(); await page.locator('#hud:not(.hidden)').waitFor();
+  await page.locator('#game[data-model-loaded="true"]').waitFor({ timeout: 60000 });
+  await page.locator('#game').click();
+  await page.waitForFunction(() => document.pointerLockElement?.id === 'game');
+  await page.keyboard.press('F6');
+  await page.keyboard.press('Digit2'); await page.locator('.ammo small').getByText('PRECISION IRON').waitFor();
+  await page.mouse.down();
+  await page.waitForFunction(() => (document.querySelector('#weapon-meter') as HTMLProgressElement).value >= 1, null, { timeout: 5000 });
+  fs.mkdirSync('artifacts', { recursive: true }); await page.screenshot({ path: 'artifacts/weapon-iron-charged.png' });
+  await page.mouse.up(); await page.waitForFunction(() => document.querySelector('#ammo')?.textContent === '4');
+  // Verify clean charge cancellation on input focus loss.
+  await delay(850); await page.mouse.down();
+  await page.waitForFunction(() => (document.querySelector('#weapon-meter') as HTMLProgressElement).value > .1);
+  await page.evaluate(() => window.dispatchEvent(new Event('blur'))); await page.mouse.up();
+  await page.waitForFunction(() => (document.querySelector('#weapon-meter') as HTMLProgressElement).value === 0);
+  await page.keyboard.press('Digit4'); await page.locator('.ammo small').getByText('DESOLDERING PUMP').waitFor();
+  await delay(1000); await page.mouse.down(); await delay(180); await page.mouse.up();
+  await page.waitForFunction(() => document.querySelector('#ammo')?.textContent === '5');
+  await page.screenshot({ path: 'artifacts/weapon-pump.png' });
+  await page.keyboard.press('Digit3'); await page.locator('.ammo small').getByText('HOT AIR REWORK GUN').waitFor();
+  await page.mouse.down();
+  await page.waitForFunction(() => (document.querySelector('#weapon-meter') as HTMLProgressElement).value > .2);
+  await page.screenshot({ path: 'artifacts/weapon-air-active.png' });
+  await page.waitForFunction(() => document.querySelector('#weapon-status')?.textContent?.includes('OVERHEATED'), null, { timeout: 7000 });
+  await page.screenshot({ path: 'artifacts/weapon-air-overheated.png' }); await page.mouse.up();
+  await page.waitForFunction(() => (document.querySelector('#weapon-meter') as HTMLProgressElement).value === 0, null, { timeout: 3500 });
+  await page.keyboard.press('Digit1'); await page.locator('.ammo small').getByText('SOLDER BLASTER').waitFor();
+  const ammo = Number(await page.locator('#ammo').textContent()); await page.mouse.down(); await delay(350); await page.mouse.up();
+  await page.waitForFunction(n => Number(document.querySelector('#ammo')?.textContent) < n, ammo);
+  await page.evaluate(() => document.exitPointerLock()); await page.locator('#leave').click();
+  await page.locator('#menu:not(.hidden)').waitFor(); await page.locator('#create').click();
+  await page.waitForFunction(() => document.querySelector('#player-count')?.textContent?.includes('1 / 8 PLAYERS'));
+  await page.keyboard.press('Digit2'); await delay(150);
+  if (!(await page.locator('.ammo small').textContent())?.includes('SOLDER BLASTER')) throw new Error('Public weapon restriction failed');
+  if (errors.length) throw new Error(errors.join('\n'));
+  console.log(JSON.stringify({ ok: true, map: 'bms', ironFullChargeAndFocusCancel: true, pumpAmmo: true, airOverheatAndCooling: true, solderAuto: true, publicSolderOnly: true }));
+} finally { await browser.close(); server.kill(); }

@@ -74,6 +74,7 @@ export class GameRoom extends Room {
       this.cancelWeapon(client.sessionId); p.reloading = false; r.reloadAt = 0;
       const config = WEAPONS[value], stock = c.stocks.get(value) ?? { ammo: config.magazine, reserve: config.reserve };
       p.weapon = value; p.specialWeapon = value === 'solder' ? '' : value; p.ammo = stock.ammo; p.reserve = stock.reserve;
+      p.weaponReadyAt = Math.max(p.weaponReadyAt, r.lastShot + config.fireInterval);
     });
     this.onMessage('weapon:trigger', (client, value: unknown) => {
       if (!this.practice || !value || typeof value !== 'object') return;

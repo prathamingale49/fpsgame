@@ -505,7 +505,7 @@ function frame(now: number) {
   if (room && snapshot) {
     const me = snapshot.players.get(room.sessionId);
     const config = currentWeapon();
-    if (mouseDown && config.mode !== 'charge' && config.mode !== 'heat' && document.pointerLockElement === canvas && me?.alive && !me.reloading && (local.transitionCooldown ?? 0) === 0 && !boardFlip && me.ammo > 0 && now - lastShot >= config.fireInterval * 1000) {
+    if (mouseDown && config.mode !== 'charge' && config.mode !== 'heat' && document.pointerLockElement === canvas && me?.alive && !me.reloading && (Date.now() - (Number.isFinite(serverClockOffsetMs) ? serverClockOffsetMs : 0)) / 1000 >= me.weaponReadyAt && (local.transitionCooldown ?? 0) === 0 && !boardFlip && me.ammo > 0 && now - lastShot >= config.fireInterval * 1000) {
       const shotId = ++nextShotId;
       const shot: ShotInput = { shotId, seq, yaw, pitch, viewTime: lastViewTime || undefined };
       room.send('shoot', shot); lastShot = now; gunView.position.z = config.id === 'pump' ? -.2 : -.09; gunView.rotation.x = config.id === 'pump' ? .25 : .09; muzzle.visible = true; sound(config.id === 'pump' ? 100 : 235, .07);
@@ -581,7 +581,7 @@ function frame(now: number) {
     airCone.visible = p.weapon === 'air' && specialHeld && p.triggerHeld && !p.overheated && !boardFlip;
     airCone.material.opacity = .10 + Math.sin(now * .025) * .025;
     const charge = p.chargeStarted ? Math.min(1, Math.max(0, ((Date.now() - (Number.isFinite(serverClockOffsetMs) ? serverClockOffsetMs : 0)) / 1000 - p.chargeStarted) / CHARGE.full)) : 0;
-    if (charge >= 1 && !fullChargeCue) { fullChargeCue = true; sound(1100, .18, 'sine'); }
+    if (specialHeld && charge >= 1 && !fullChargeCue) { fullChargeCue = true; sound(1100, .18, 'sine'); }
     if (!charge) fullChargeCue = false;
     weaponMeter.hidden = p.weapon !== 'iron' && p.weapon !== 'air'; weaponMeter.value = p.weapon === 'iron' ? charge : p.heat;
     weaponMeter.style.accentColor = p.overheated && p.weapon === 'air' ? '#ff544a' : charge >= 1 ? '#88dfff' : '#ffd24a';
