@@ -130,7 +130,6 @@ let maxPending = 0, maxCorrection = 0;
 });
 (window as unknown as { __pcbResetPerfWindow: () => void }).__pcbResetPerfWindow = () => { frameTimes.length = 0; playCorrections.length = 0; };
 let wasReloading = false;
-let playerColorIndex = 0;
 
 function boxMesh(box: { min: number[]; max: number[]; name?: string }, mat: THREE.Material): THREE.Mesh {
   const size = new THREE.Vector3(box.max[0] - box.min[0], box.max[1] - box.min[1], box.max[2] - box.min[2]);
@@ -185,7 +184,10 @@ function buildMap(data: MapData) {
 }
 buildMap(map);
 
-function makePlayer(index: number): THREE.Group {
+function makePlayer(id: string): THREE.Group {
+  // Avatar meshes are recreated across sides and respawns; identity keeps their color stable.
+  let index = 0;
+  for (let i = 0; i < id.length; i++) index = (Math.imul(index, 31) + id.charCodeAt(i)) >>> 0;
   const group = new THREE.Group(); const suit = playerMaterials[index % playerMaterials.length];
   // An upright rocket-person: pointed nose, cylindrical suit, view window, fins and boots.
   const body = new THREE.Mesh(new THREE.CylinderGeometry(.34, .43, 1.15, 12), suit); body.position.y = 1; group.add(body);
@@ -360,7 +362,7 @@ function syncState(state: MatchState) {
     present.add(id);
     let entry = remotes.get(id);
     if (!entry) {
-      const mesh = makePlayer(playerColorIndex++);
+      const mesh = makePlayer(id);
       const { bar, fill } = makeHealthBar();
       scene.add(mesh, bar);
       entry = { mesh, healthBar: bar, healthFill: fill, samples: [], yaw: p.yaw, hp: p.hp, displayedHp: p.hp };
