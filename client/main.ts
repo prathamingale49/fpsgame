@@ -4,6 +4,7 @@ import { Client, type Room } from '@colyseus/sdk';
 import { aimRay, collisionCacheStats, movementYaw, samplePosition, hitscan, COMBAT, DEV_SCALE, EDGE_FLIP_SECONDS, JUMP_HEIGHT_RATIO, PLAYER, initialMotion, MOVEMENT_PROTOCOL, stepMotion, testMap, TICK, WEAPON, tuningForHeight, type Input, type MapData, type Motion, type BoardSide, type PositionSample, type ShotInput } from '../shared/game';
 import type { MatchState, PlayerState } from '../server/state';
 import './style.css';
+import { WEAPONS, WEAPON_IDS, CHARGE, HEAT, type WeaponId } from '../shared/weapons';
 import { EdgeOrbit } from './edge-orbit';
 
 const el = <T extends HTMLElement>(id: string) => document.getElementById(id) as T;
@@ -15,6 +16,15 @@ practiceButton.style.cssText = 'width:100%;margin-top:8px;padding:15px;backgroun
 let showNpcHitboxes = false;
 const npcHitboxes = new Map<string, THREE.Box3Helper>();
 const damageNumbers: { element: HTMLElement; position: THREE.Vector3; born: number }[] = [];
+const weaponStatus = document.createElement('div'); weaponStatus.id = 'weapon-status';
+weaponStatus.style.cssText = 'position:absolute;right:28px;bottom:145px;color:#ffd24a;font:12px monospace;text-align:right;pointer-events:none';
+el('hud').append(weaponStatus);
+const weaponMeter = document.createElement('progress'); weaponMeter.id = 'weapon-meter'; weaponMeter.max = 1;
+weaponMeter.style.cssText = 'position:absolute;right:28px;bottom:125px;width:200px;height:10px;accent-color:#ffd24a'; weaponMeter.hidden = true; el('hud').append(weaponMeter);
+let specialHeld = false, fullChargeCue = false;
+const currentWeapon = () => WEAPONS[(room?.state.players.get(room.sessionId)?.weapon ?? 'solder') as WeaponId];
+const weaponShot = (): ShotInput => ({ shotId: ++nextShotId, seq, yaw, pitch, viewTime: lastViewTime || undefined });
+function cancelSpecial() { specialHeld = false; fullChargeCue = false; if (room?.state.practice) room.send('weapon:trigger', { action: 'cancel' }); }
 const canvas = el<HTMLCanvasElement>('game');
 const renderer = new THREE.WebGLRenderer({ canvas, antialias: true, powerPreference: 'high-performance' });
 let quality = localStorage.getItem('pcb-quality') || 'balanced';
@@ -212,6 +222,8 @@ function makeHealthBar(): { bar: THREE.Group; fill: THREE.Mesh<THREE.PlaneGeomet
   return { bar, fill };
 }
 const gunView = new THREE.Group(); camera.add(gunView); scene.add(camera);
+const airCone = new THREE.Mesh(new THREE.ConeGeometry(Math.tan(HEAT.halfAngle) * WEAPONS.air.range, WEAPONS.air.range, 12, 1, true), new THREE.MeshBasicMaterial({ color: '#ff9d36', transparent: true, opacity: .12, depthWrite: false, side: THREE.DoubleSide }));
+airCone.rotation.x = Math.PI / 2; airCone.position.z = -WEAPONS.air.range / 2; airCone.visible = false; camera.add(airCone);
 gunView.scale.setScalar(.75 * PLAYER.height / 1.8);
 const gunBody = new THREE.Mesh(new THREE.BoxGeometry(.18, .22, .75), dark); gunBody.position.set(.43, -.36, -.75); gunView.add(gunBody);
 const gunAccent = new THREE.Mesh(new THREE.BoxGeometry(.19, .07, .28), copper); gunAccent.position.set(.43, -.22, -.77); gunView.add(gunAccent);
@@ -247,9 +259,9 @@ function makeSpool(): THREE.Group {
   const solder = new THREE.Mesh(new THREE.TorusGeometry(.29, .065, 6, 18), metal); solder.rotation.y = Math.PI / 2; group.add(solder);
   return group;
 }
-function addTracer(from: number[], to: number[]): THREE.Line {
+function addTracer(from: number[], to: number[], color = '#e6e9d8'): THREE.Line {
   const geo = new THREE.BufferGeometry().setFromPoints([new THREE.Vector3(...from), new THREE.Vector3(...to)]);
-  const line = new THREE.Line(geo, new THREE.LineBasicMaterial({ color: '#e6e9d8', transparent: true, opacity: .9 }));
+  const line = new THREE.Line(geo, new THREE.LineBasicMaterial({ color, transparent: true, opacity: .9 }));
   scene.add(line); shots.push({ line, born: performance.now() });
   return line;
 }
@@ -373,15 +385,15 @@ async function connect(mode: 'play' | 'create' | 'join' | 'reconnect' | 'practic
     history.replaceState(null, '', `?room=${room.roomId}`);
     room.onStateChange(syncState);
     room.onMessage('feed', (msg: { text: string }) => showFeed(msg.text));
-    room.onMessage('shot', (msg: { shooter: string; shotId?: number; side: BoardSide; from: number[]; to: number[]; hit?: string }) => {
+    room.onMessage('shot', (msg: { shooter: string; shotId?: number; weapon?: WeaponId; side: BoardSide; from: number[]; to: number[]; hit?: string }) => {
       if (msg.side === (local.side ?? 'front')) {
         const predicted = msg.shooter === room?.sessionId && msg.shotId !== undefined ? predictedTracers.get(msg.shotId) : undefined;
         if (predicted) {
           // Correct the one locally predicted tracer to the server result.
           predicted.geometry.setFromPoints([new THREE.Vector3(...msg.from), new THREE.Vector3(...msg.to)]);
           predictedTracers.delete(msg.shotId!);
-        } else addTracer(msg.from, msg.to);
-        addImpactSparks(msg.from, msg.to);
+        } else if (msg.weapon !== 'air') addTracer(msg.from, msg.to, msg.weapon === 'iron' ? '#a9b8ff' : msg.weapon === 'pump' ? '#ffb347' : undefined);
+        if (msg.weapon !== 'air') addImpactSparks(msg.from, msg.to);
       }
       if (msg.shooter === room?.sessionId && msg.hit) flashHit();
     });
@@ -430,9 +442,29 @@ document.addEventListener('keydown', e => { keys.add(e.code); if (e.code === 'F3
 document.addEventListener('keyup', e => { keys.delete(e.code); if (e.code === 'Tab') el('scoreboard').classList.add('hidden'); });
 document.addEventListener('mousemove', e => { if (document.pointerLockElement !== canvas) return; yaw -= e.movementX * sensitivity; pitch = Math.max(-1.4, Math.min(1.4, pitch - e.movementY * sensitivity)); });
 canvas.addEventListener('mousedown', e => { if (e.button === 0) { if (document.pointerLockElement !== canvas) canvas.requestPointerLock(); mouseDown = true; } });
-document.addEventListener('mouseup', () => mouseDown = false);
+document.addEventListener('mouseup', () => {
+  mouseDown = false;
+  if (specialHeld && currentWeapon().id === 'iron') { room?.send('weapon:trigger', { action: 'release', shot: weaponShot() }); specialHeld = false; fullChargeCue = false; gunView.position.z = -.15; sound(130, .12); }
+  else cancelSpecial();
+});
 document.addEventListener('pointerlockchange', () => { el('pause').classList.toggle('hidden', !room || document.pointerLockElement === canvas); keys.clear(); mouseDown = false; });
 window.addEventListener('blur', () => { keys.clear(); mouseDown = false; });
+window.addEventListener('blur', cancelSpecial);
+document.addEventListener('visibilitychange', () => { if (document.hidden) { mouseDown = false; cancelSpecial(); } });
+document.addEventListener('pointerlockchange', () => { if (document.pointerLockElement !== canvas) cancelSpecial(); });
+document.addEventListener('keydown', e => {
+  if (!room?.state.practice || e.repeat) return;
+  const slot = ['Digit1', 'Digit2', 'Digit3', 'Digit4'].indexOf(e.code);
+  if (slot >= 0) { e.preventDefault(); mouseDown = false; cancelSpecial(); room.send('weapon:select', WEAPON_IDS[slot]); }
+  if (e.code === 'KeyR') { mouseDown = false; cancelSpecial(); }
+});
+// Hold leases and aim updates are independent of rendering FPS.
+setInterval(() => {
+  const p = room?.state.players.get(room.sessionId);
+  if (!room?.state.practice || !p?.alive || p.reloading || p.transitionCooldown > 0 || document.pointerLockElement !== canvas || !mouseDown) { if (specialHeld) cancelSpecial(); return; }
+  if (p.weapon !== 'iron' && p.weapon !== 'air') return;
+  room.send('weapon:trigger', { action: p.triggerHeld ? 'aim' : 'start', shot: weaponShot() }); specialHeld = true;
+}, 100);
 el('pause').onclick = e => { if ((e.target as HTMLElement).id !== 'leave') canvas.requestPointerLock(); };
 
 let previous = performance.now();
@@ -472,15 +504,18 @@ function frame(now: number) {
   frameTimes.push(elapsedMs); if (frameTimes.length > 2400) frameTimes.splice(0, 1200);
   if (room && snapshot) {
     const me = snapshot.players.get(room.sessionId);
-    if (mouseDown && document.pointerLockElement === canvas && me?.alive && !me.reloading && (local.transitionCooldown ?? 0) === 0 && !boardFlip && me.ammo > 0 && now - lastShot >= WEAPON.fireInterval * 1000) {
+    const config = currentWeapon();
+    if (mouseDown && config.mode !== 'charge' && config.mode !== 'heat' && document.pointerLockElement === canvas && me?.alive && !me.reloading && (local.transitionCooldown ?? 0) === 0 && !boardFlip && me.ammo > 0 && now - lastShot >= config.fireInterval * 1000) {
       const shotId = ++nextShotId;
       const shot: ShotInput = { shotId, seq, yaw, pitch, viewTime: lastViewTime || undefined };
-      room.send('shoot', shot); lastShot = now; gunView.position.z = -.09; gunView.rotation.x = .09; muzzle.visible = true; sound(235, .07);
+      room.send('shoot', shot); lastShot = now; gunView.position.z = config.id === 'pump' ? -.2 : -.09; gunView.rotation.x = config.id === 'pump' ? .25 : .09; muzzle.visible = true; sound(config.id === 'pump' ? 100 : 235, .07);
       const ray = aimRay(local.x, local.y, local.z, movementYaw(yaw, local), pitch, playerTuning);
       // Immediate full-length preview, without invented impact sparks. The
       // authoritative response reuses and corrects this same tracer.
-      const predicted = hitscan(ray, map, [], room.sessionId, playerTuning, local.side ?? 'front');
-      predictedTracers.set(shotId, addTracer(ray.origin, ray.origin.map((value, i) => value + ray.direction[i] * predicted.distance)));
+      if (config.id === 'solder') {
+        const predicted = hitscan(ray, map, [], room.sessionId, playerTuning, local.side ?? 'front');
+        predictedTracers.set(shotId, addTracer(ray.origin, ray.origin.map((value, i) => value + ray.direction[i] * predicted.distance)));
+      }
     }
     const side = local.side ?? 'front';
     if (!me?.alive) boardFlip = null;
@@ -541,6 +576,23 @@ function frame(now: number) {
   if (room?.state.practice) {
     el('timer').textContent = 'PRACTICE';
     el('player-count').textContent = `5 NPC TARGETS · F5 HITBOXES · F6 ${room.state.npcMovement ? 'FREEZE' : 'RESUME'}`;
+    const p = room.state.players.get(room.sessionId)!;
+    const config = currentWeapon();
+    airCone.visible = p.weapon === 'air' && specialHeld && p.triggerHeld && !p.overheated && !boardFlip;
+    airCone.material.opacity = .10 + Math.sin(now * .025) * .025;
+    const charge = p.chargeStarted ? Math.min(1, Math.max(0, ((Date.now() - (Number.isFinite(serverClockOffsetMs) ? serverClockOffsetMs : 0)) / 1000 - p.chargeStarted) / CHARGE.full)) : 0;
+    if (charge >= 1 && !fullChargeCue) { fullChargeCue = true; sound(1100, .18, 'sine'); }
+    if (!charge) fullChargeCue = false;
+    weaponMeter.hidden = p.weapon !== 'iron' && p.weapon !== 'air'; weaponMeter.value = p.weapon === 'iron' ? charge : p.heat;
+    weaponMeter.style.accentColor = p.overheated && p.weapon === 'air' ? '#ff544a' : charge >= 1 ? '#88dfff' : '#ffd24a';
+    el('bottom-hud').querySelector('.ammo small')!.textContent = config.name.toUpperCase();
+    el('ammo').textContent = config.id === 'air' ? `${Math.round(p.heat * 100)}%` : String(p.ammo);
+    el('reserve').textContent = config.id === 'air' ? 'HEAT' : String(p.reserve);
+    el('ammo-bar').style.width = `${100 * (config.id === 'air' ? p.heat : p.ammo / config.magazine)}%`;
+    weaponStatus.textContent = `1 BLASTER · 2 IRON · 3 HOT AIR · 4 PUMP\n${p.reloading ? 'RELOADING' : p.overheated && p.weapon === 'air' ? 'OVERHEATED — COOLING' : p.weapon === 'iron' ? `CHARGE ${Math.round(charge * 100)}% ${charge >= 1 ? 'READY' : '(hold / release)'}` : p.weapon === 'air' ? `HEAT ${Math.round(p.heat * 100)}%` : ''}`;
+    weaponStatus.style.whiteSpace = 'pre-line';
+    const viewScale = .75 * playerTuning.height / 1.8;
+    gunView.scale.set(viewScale * (config.id === 'iron' ? .45 : config.id === 'air' ? 1.3 : 1), viewScale * (config.id === 'iron' ? .6 : 1), viewScale * (config.id === 'iron' ? 1.8 : 1));
     for (const [id, entry] of remotes) {
       if (!room.state.players.get(id)?.npc) continue;
       let helper = npcHitboxes.get(id);
@@ -550,6 +602,7 @@ function frame(now: number) {
       helper.visible = showNpcHitboxes && entry.mesh.visible;
     }
   }
+  if (!room?.state.practice) { airCone.visible = false; weaponMeter.hidden = true; weaponStatus.textContent = ''; gunView.scale.setScalar(.75 * playerTuning.height / 1.8); el('bottom-hud').querySelector('.ammo small')!.textContent = 'SOLDER BLASTER · SOLDER'; }
   for (let i = damageNumbers.length - 1; i >= 0; i--) {
     const number = damageNumbers[i], age = (now - number.born) / 1000;
     if (age > 1 || !room?.state.practice) { number.element.remove(); damageNumbers.splice(i, 1); continue; }
