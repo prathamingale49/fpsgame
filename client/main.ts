@@ -1,7 +1,7 @@
 import * as THREE from 'three';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 import { Client, type Room } from '@colyseus/sdk';
-import { aimRay, collisionCacheStats, movementYaw, samplePosition, hitscan, COMBAT, DEV_SCALE, JUMP_HEIGHT_RATIO, PLAYER, initialMotion, MOVEMENT_PROTOCOL, stepMotion, testMap, TICK, WEAPON, tuningForHeight, type Input, type MapData, type Motion, type BoardSide, type PositionSample, type ShotInput } from '../shared/game';
+import { aimRay, collisionCacheStats, movementYaw, samplePosition, hitscan, COMBAT, DEV_SCALE, EDGE_FLIP_SECONDS, JUMP_HEIGHT_RATIO, PLAYER, initialMotion, MOVEMENT_PROTOCOL, stepMotion, testMap, TICK, WEAPON, tuningForHeight, type Input, type MapData, type Motion, type BoardSide, type PositionSample, type ShotInput } from '../shared/game';
 import type { MatchState, PlayerState } from '../server/state';
 import './style.css';
 
@@ -32,6 +32,9 @@ let devScaleEnabled = false;
 let lastSentInput: Input | null = null;
 let nextInputAt = performance.now();
 let yaw = 0, pitch = 0, seq = 0, mouseDown = false, lastShot = 0;
+type BoardFlip = { from: BoardSide; to: BoardSide; cameraStart: THREE.Vector3; yawStart: number; progress: number };
+let visualSide: BoardSide = 'front';
+let boardFlip: BoardFlip | null = null;
 let nextShotId = 0, serverClockOffsetMs = NaN, lastViewTime = 0;
 let sensitivity = Number(localStorage.getItem('pcb-sensitivity')) || .0022;
 let volume = Number(localStorage.getItem('pcb-volume') ?? '.25');
@@ -60,6 +63,9 @@ function recordMovement(event: string, ack: number, correctionValue = 0, forward
 const keys = new Set<string>();
 type RemotePlayer = { mesh: THREE.Group; healthBar: THREE.Group; healthFill: THREE.Mesh<THREE.PlaneGeometry, THREE.MeshBasicMaterial>; samples: PositionSample[]; yaw: number; hp: number; displayedHp: number };
 const remotes = new Map<string, RemotePlayer>();
+const flipIndicator = el<HTMLDivElement>('board-flip');
+const flipLabel = el<HTMLSpanElement>('board-flip-label');
+const flipProgress = el<HTMLElement>('board-flip-progress');
 const shots: { line: THREE.LineSegments | THREE.Line; born: number }[] = [];
 const predictedTracers = new Map<number, THREE.Line>();
 const spoolMeshes = new Map<string, THREE.Group>();
@@ -375,6 +381,7 @@ async function connect(mode: 'play' | 'create' | 'join' | 'reconnect') {
     room.onLeave(() => { sessionStorage.removeItem('pcb-reconnection-token'); room = null; scalePanel.hidden = true; el('menu').classList.remove('hidden'); el('hud').classList.add('hidden'); document.exitPointerLock(); showFeed('Disconnected from room'); });
     sessionStorage.setItem('pcb-reconnection-token', room.reconnectionToken);
     if (room.state?.players) syncState(room.state);
+    visualSide = local.side ?? 'front'; boardFlip = null; flipIndicator.classList.add('hidden');
     el('menu').classList.add('hidden'); el('hud').classList.remove('hidden');
     if (devScaleEnabled) showFeed('DEV SCALE enabled · press F4 to adjust height');
     if (mode === 'reconnect') el('pause').classList.remove('hidden'); else void canvas.requestPointerLock();
@@ -396,7 +403,7 @@ const invite = new URLSearchParams(location.search).get('room'); if (invite) el<
 if (sessionStorage.getItem('pcb-reconnection-token')) void connect('reconnect');
 document.addEventListener('keydown', e => { keys.add(e.code); if (e.code === 'F3') { e.preventDefault(); showDebug = !showDebug; debug.hidden = !showDebug; fpsFrames = 0; fpsStart = performance.now(); } if (e.code === 'F4' && devScaleEnabled && room && !e.repeat) { e.preventDefault(); scalePanel.hidden = !scalePanel.hidden; if (!scalePanel.hidden && document.pointerLockElement === canvas) document.exitPointerLock(); } if (e.code === 'Tab') { e.preventDefault(); el('scoreboard').classList.remove('hidden'); } if (e.code === 'KeyR' && room && !e.repeat) room.send('reload'); });
 document.addEventListener('keyup', e => { keys.delete(e.code); if (e.code === 'Tab') el('scoreboard').classList.add('hidden'); });
-document.addEventListener('mousemove', e => { if (document.pointerLockElement !== canvas) return; yaw -= e.movementX * sensitivity; pitch = Math.max(-1.4, Math.min(1.4, pitch - e.movementY * sensitivity)); });
+document.addEventListener('mousemove', e => { if (document.pointerLockElement !== canvas || boardFlip || (local.transitionCooldown ?? 0) > 0) return; yaw -= e.movementX * sensitivity; pitch = Math.max(-1.4, Math.min(1.4, pitch - e.movementY * sensitivity)); });
 canvas.addEventListener('mousedown', e => { if (e.button === 0) { if (document.pointerLockElement !== canvas) canvas.requestPointerLock(); mouseDown = true; } });
 document.addEventListener('mouseup', () => mouseDown = false);
 document.addEventListener('pointerlockchange', () => { el('pause').classList.toggle('hidden', !room || document.pointerLockElement === canvas); keys.clear(); mouseDown = false; });
@@ -421,7 +428,7 @@ setInterval(() => {
     sprint: soakMode || (!testing && locked && (keys.has('ShiftLeft') || keys.has('ShiftRight'))) };
   if (soakMode) soakTick++;
   if (testing && --testMove!.remaining === 0) testMove = null;
-  const repeatedIdle = local.grounded && local.mantleTarget === 0 && input.forward === 0 && input.strafe === 0 && !input.jump && !input.sprint && lastSentInput
+  const repeatedIdle = local.grounded && local.mantleTarget === 0 && (local.transitionCooldown ?? 0) === 0 && input.forward === 0 && input.strafe === 0 && !input.jump && !input.sprint && lastSentInput
     && lastSentInput.forward === 0 && lastSentInput.strafe === 0 && !lastSentInput.jump && !lastSentInput.sprint
     && lastSentInput.yaw === input.yaw && lastSentInput.pitch === input.pitch;
   if (repeatedIdle) return;
@@ -440,7 +447,7 @@ function frame(now: number) {
   frameTimes.push(elapsedMs); if (frameTimes.length > 2400) frameTimes.splice(0, 1200);
   if (room && snapshot) {
     const me = snapshot.players.get(room.sessionId);
-    if (mouseDown && document.pointerLockElement === canvas && me?.alive && !me.reloading && me.ammo > 0 && now - lastShot >= WEAPON.fireInterval * 1000) {
+    if (mouseDown && document.pointerLockElement === canvas && me?.alive && !me.reloading && (local.transitionCooldown ?? 0) === 0 && !boardFlip && me.ammo > 0 && now - lastShot >= WEAPON.fireInterval * 1000) {
       const shotId = ++nextShotId;
       const shot: ShotInput = { shotId, seq, yaw, pitch, viewTime: lastViewTime || undefined };
       room.send('shoot', shot); lastShot = now; gunView.position.z = -.09; gunView.rotation.x = .09; muzzle.visible = true; sound(235, .07);
@@ -450,19 +457,45 @@ function frame(now: number) {
       const predicted = hitscan(ray, map, [], room.sessionId, playerTuning, local.side ?? 'front');
       predictedTracers.set(shotId, addTracer(ray.origin, ray.origin.map((value, i) => value + ray.direction[i] * predicted.distance)));
     }
+    const side = local.side ?? 'front';
+    if (map.back?.enabled && side !== visualSide) {
+      boardFlip = { from: visualSide, to: side, cameraStart: camera.position.clone(), yawStart: camera.rotation.y, progress: 0 };
+      visualSide = side;
+      flipLabel.textContent = `FLIPPING PCB · ${side.toUpperCase()} SIDE`;
+      flipIndicator.classList.remove('hidden');
+    }
     camera.position.set(local.x, local.y + playerTuning.eye, local.z);
     canvas.dataset.position = `${local.x.toFixed(2)},${local.y.toFixed(2)},${local.z.toFixed(2)}`;
     camera.rotation.order = 'YXZ'; camera.rotation.y = movementYaw(yaw, local); camera.rotation.x = pitch; camera.rotation.z = 0;
-    const back = local.side === 'back' && map.back?.enabled;
+    const back = side === 'back' && map.back?.enabled;
     world.rotation.x = back ? Math.PI : 0; world.position.y = back ? -map.back!.thickness : 0;
-    canvas.dataset.side = local.side ?? 'front';
-    el('side-label').textContent = (local.side ?? 'front').toUpperCase();
+    if (boardFlip && map.back?.enabled) {
+      const raw = THREE.MathUtils.clamp(1 - (local.transitionCooldown ?? 0) / EDGE_FLIP_SECONDS, 0, 1);
+      boardFlip.progress = Math.max(boardFlip.progress, raw);
+      const t = boardFlip.progress;
+      const eased = t * t * (3 - 2 * t);
+      const tilt = Math.sin(Math.PI * t);
+      const fromBack = boardFlip.from === 'back';
+      world.rotation.x = Math.PI * ((fromBack ? 1 : 0) + eased);
+      world.position.y = -map.back.thickness * (fromBack ? 1 - eased : eased);
+      camera.position.lerpVectors(boardFlip.cameraStart, new THREE.Vector3(local.x, local.y + playerTuning.eye, local.z), eased);
+      camera.position.y += tilt * Math.min(3.5, playerTuning.height * 4);
+      const targetYaw = movementYaw(yaw, local);
+      camera.rotation.y = boardFlip.yawStart + Math.atan2(Math.sin(targetYaw - boardFlip.yawStart), Math.cos(targetYaw - boardFlip.yawStart)) * eased;
+      camera.rotation.x = pitch - .18 * tilt;
+      camera.rotation.z = .08 * tilt;
+      flipProgress.style.width = `${(t * 100).toFixed(1)}%`;
+      if (raw >= 1) { boardFlip = null; flipIndicator.classList.add('hidden'); }
+    }
+    gunView.visible = !boardFlip;
+    canvas.dataset.side = side;
+    el('side-label').textContent = side.toUpperCase();
     // Prediction may switch surfaces before the next snapshot arrives.
     for (const [id, entry] of remotes) {
-      const visible = snapshot.players.get(id)?.side === (local.side ?? 'front');
+      const visible = !boardFlip && snapshot.players.get(id)?.side === side;
       entry.mesh.visible = visible; entry.healthBar.visible = visible;
     }
-    for (const [id, mesh] of spoolMeshes) { const pickup = snapshot.pickups.get(id); mesh.visible = !!pickup?.active && pickup.side === (local.side ?? 'front'); }
+    for (const [id, mesh] of spoolMeshes) { const pickup = snapshot.pickups.get(id); mesh.visible = !boardFlip && !!pickup?.active && pickup.side === side; }
     gunView.position.z += (0 - gunView.position.z) * Math.min(1, dt * 16);
     gunView.rotation.x += ((me?.reloading ? -.65 : 0) - gunView.rotation.x) * Math.min(1, dt * 12);
     if (now - lastShot > 45) muzzle.visible = false;
