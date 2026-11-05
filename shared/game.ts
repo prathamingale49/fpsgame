@@ -1,6 +1,7 @@
 export const TICK = 1 / 60;
-export const MOVEMENT_PROTOCOL = 5;
+export const MOVEMENT_PROTOCOL = 6;
 export const EDGE_FLIP_SECONDS = .9;
+export const FLIP_COOLDOWN_SECONDS = 5;
 export const MATCH_SECONDS = 300;
 export const RESPAWN_SECONDS = 2.5;
 export type PlayerTuning = { radius: number; height: number; eye: number; walkSpeed: number; sprintSpeed: number; jumpSpeed: number; gravity: number; mantleSpeed: number; mantleReach: number; fallDeathDepth: number };
@@ -47,7 +48,7 @@ export function validShotInput(value: unknown): value is ShotInput {
     && typeof v.pitch === 'number' && Number.isFinite(v.pitch) && Math.abs(v.pitch) <= 1.5
     && (v.viewTime === undefined || (typeof v.viewTime === 'number' && Number.isFinite(v.viewTime)));
 }
-export type Motion = { x: number; y: number; z: number; vy: number; grounded: boolean; jumpHeld: boolean; mantleTarget: number; side?: BoardSide; transitionCooldown?: number; headingOffset?: number };
+export type Motion = { x: number; y: number; z: number; vy: number; grounded: boolean; jumpHeld: boolean; mantleTarget: number; side?: BoardSide; transitionCooldown?: number; flipCooldown?: number; headingOffset?: number };
 export type PositionSample = { time: number; x: number; y: number; z: number; side?: BoardSide };
 // Snapshots are sampled in server time so the client can render and shoot against
 // the same historical target position; never interpolate through side changes.
@@ -85,7 +86,7 @@ export function surfaceMap(map: MapData, side: BoardSide = 'front'): MapData {
 
 export function transitionEdge(motion: Motion, map: MapData, tuning: PlayerTuning): Motion {
   if (!map.back?.enabled) return motion;
-  if ((motion.transitionCooldown ?? 0) > 0) return { ...motion,
+  if ((motion.transitionCooldown ?? 0) > 0 || (motion.flipCooldown ?? 0) > 0) return { ...motion,
     x: clamp(motion.x, -map.width / 2 + tuning.radius, map.width / 2 - tuning.radius),
     z: clamp(motion.z, -map.depth / 2 + tuning.radius, map.depth / 2 - tuning.radius) };
   const xOutside = Math.abs(motion.x) > map.width / 2;
@@ -103,7 +104,7 @@ export function transitionEdge(motion: Motion, map: MapData, tuning: PlayerTunin
   // Snap the two orientations so synchronized float32 round-off cannot
   // accumulate over an unlimited number of wraps.
   const headingOffset = xOutside ? ((motion.headingOffset ?? 0) > 1 ? 0 : Math.PI) : (motion.headingOffset ?? 0);
-  return { ...motion, x, z, y: y + .02, vy: 0, grounded: true, mantleTarget: 0, side, headingOffset, transitionCooldown: EDGE_FLIP_SECONDS };
+  return { ...motion, x, z, y: y + .02, vy: 0, grounded: true, mantleTarget: 0, side, headingOffset, transitionCooldown: EDGE_FLIP_SECONDS, flipCooldown: FLIP_COOLDOWN_SECONDS };
 }
 
 export const testMap: MapData = {
@@ -117,7 +118,7 @@ export const testMap: MapData = {
 };
 
 export function clamp(value: number, lo: number, hi: number): number { return Math.max(lo, Math.min(hi, value)); }
-export function initialMotion(spawn: Spawn): Motion { return { x: spawn[0], y: spawn[1], z: spawn[2], vy: 0, grounded: true, jumpHeld: false, mantleTarget: 0, side: 'front', transitionCooldown: 0, headingOffset: 0 }; }
+export function initialMotion(spawn: Spawn): Motion { return { x: spawn[0], y: spawn[1], z: spawn[2], vy: 0, grounded: true, jumpHeld: false, mantleTarget: 0, side: 'front', transitionCooldown: 0, flipCooldown: 0, headingOffset: 0 }; }
 export function validInput(v: unknown): v is Input {
   if (!v || typeof v !== 'object') return false;
   const a = v as Record<string, unknown>;
@@ -172,11 +173,11 @@ export function stepMotion(previous: Motion, input: Input, map: MapData, dt = TI
   // Keep the player at the arrival point until the animation has completed.
   if ((previous.transitionCooldown ?? 0) > 0) return transitionEdge({
     ...previous, vy: 0, grounded: true, jumpHeld: input.jump,
-    transitionCooldown: Math.max(0, (previous.transitionCooldown ?? 0) - dt),
+    flipCooldown: ((previous.flipCooldown ?? 0) <= dt + .0001 ? 0 : (previous.flipCooldown ?? 0) - dt), transitionCooldown: Math.max(0, (previous.transitionCooldown ?? 0) - dt),
   }, rootMap, tuning);
   input = { ...input, yaw: movementYaw(input.yaw, previous) };
   map = surfaceMap(map, previous.side);
-  const out = { ...previous, transitionCooldown: Math.max(0, (previous.transitionCooldown ?? 0) - dt) };
+  const out = { ...previous, flipCooldown: ((previous.flipCooldown ?? 0) <= dt + .0001 ? 0 : (previous.flipCooldown ?? 0) - dt), transitionCooldown: Math.max(0, (previous.transitionCooldown ?? 0) - dt) };
   const f = input.forward, s = input.strafe;
   const len = Math.max(1, Math.hypot(f, s));
   const speed = input.sprint ? tuning.sprintSpeed : tuning.walkSpeed;
