@@ -10,7 +10,7 @@ Default/public solder behavior is retained. Specials are selectable only in
 practice. No pickups, map, tuning, rocket redesign or deployment changes.
 
 Practice UI: 1–4 select, hold/release iron, charged cue/meter, heat meter and
-overheat label, bounded single cone mesh, violet iron tracer / orange pellet
+overheat label, bounded cone mesh plus 24 reusable heat particles, violet iron tracer / orange pellet
 burst, distinct recoil, placeholder view-model proportions retaining scale.
 Trigger aim/leases update independently of rendering; reload, switch, death,
 blur, visibility loss and pointer unlock cancel charge. Server rejects stale
@@ -37,3 +37,10 @@ tests/weapon-server.test.ts, tests/fixtures/weapon-server.ts,
 tools/weapons-browser.ts, README.md, this document.
 Reproduce browser verification after build: npx tsx tools/weapons-browser.ts.
 No geometry, movement, branding or Railway files changed.
+
+Visual follow-up: offset the heat cone toward the muzzle and added 24 fixed,
+reused particles after screenshot inspection showed the camera-apex cone was
+nearly invisible. Build and full browser weapon flow pass again. Damage text
+rounds fractional cone damage to one decimal for readability.
+Initial test-fixture cold-start readiness timeout was corrected with a bounded
+longer startup wait and stderr capture; final suite has no skipped tests.

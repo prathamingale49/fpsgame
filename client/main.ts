@@ -223,7 +223,11 @@ function makeHealthBar(): { bar: THREE.Group; fill: THREE.Mesh<THREE.PlaneGeomet
 }
 const gunView = new THREE.Group(); camera.add(gunView); scene.add(camera);
 const airCone = new THREE.Mesh(new THREE.ConeGeometry(Math.tan(HEAT.halfAngle) * WEAPONS.air.range, WEAPONS.air.range, 12, 1, true), new THREE.MeshBasicMaterial({ color: '#ff9d36', transparent: true, opacity: .12, depthWrite: false, side: THREE.DoubleSide }));
-airCone.rotation.x = Math.PI / 2; airCone.position.z = -WEAPONS.air.range / 2; airCone.visible = false; camera.add(airCone);
+airCone.rotation.x = Math.PI / 2; airCone.position.set(.18, -.12, -.3 - WEAPONS.air.range / 2); airCone.visible = false; camera.add(airCone);
+const heatPositions = new Float32Array(24 * 3);
+const heatGeometry = new THREE.BufferGeometry(); heatGeometry.setAttribute('position', new THREE.BufferAttribute(heatPositions, 3));
+const heatParticles = new THREE.Points(heatGeometry, new THREE.PointsMaterial({ color: '#ffb35a', size: .07, transparent: true, opacity: .65, depthWrite: false }));
+heatParticles.position.set(.18, -.12, -.3); heatParticles.visible = false; camera.add(heatParticles);
 gunView.scale.setScalar(.75 * PLAYER.height / 1.8);
 const gunBody = new THREE.Mesh(new THREE.BoxGeometry(.18, .22, .75), dark); gunBody.position.set(.43, -.36, -.75); gunView.add(gunBody);
 const gunAccent = new THREE.Mesh(new THREE.BoxGeometry(.19, .07, .28), copper); gunAccent.position.set(.43, -.22, -.77); gunView.add(gunAccent);
@@ -401,7 +405,7 @@ async function connect(mode: 'play' | 'create' | 'join' | 'reconnect' | 'practic
       if (msg.target === room?.sessionId) flashDamage();
       const target = room?.state.players.get(msg.target);
       if (room?.state.practice && target?.npc && target.side === local.side) {
-        const element = document.createElement('div'); element.textContent = `-${msg.amount}`;
+        const element = document.createElement('div'); element.textContent = `-${Number(msg.amount.toFixed(1))}`;
         element.style.cssText = 'position:fixed;left:0;top:0;color:#ffd24a;font:bold 22px monospace;pointer-events:none;z-index:4';
         document.body.append(element); damageNumbers.push({ element, position: new THREE.Vector3(target.x, target.y + playerTuning.height, target.z), born: performance.now() });
       }
@@ -603,6 +607,16 @@ function frame(now: number) {
     }
   }
   if (!room?.state.practice) { airCone.visible = false; weaponMeter.hidden = true; weaponStatus.textContent = ''; gunView.scale.setScalar(.75 * playerTuning.height / 1.8); el('bottom-hud').querySelector('.ammo small')!.textContent = 'SOLDER BLASTER · SOLDER'; }
+  heatParticles.visible = airCone.visible;
+  if (heatParticles.visible) {
+    for (let i = 0; i < 24; i++) {
+      const t = (now * .0015 + i / 24) % 1, distance = t * WEAPONS.air.range;
+      const radius = Math.tan(HEAT.halfAngle) * distance * (.3 + (i % 5) / 7), angle = i * 2.39996;
+      heatPositions[i * 3] = Math.cos(angle) * radius; heatPositions[i * 3 + 1] = Math.sin(angle) * radius; heatPositions[i * 3 + 2] = -distance;
+    }
+    heatGeometry.attributes.position.needsUpdate = true;
+    heatGeometry.computeBoundingSphere();
+  }
   for (let i = damageNumbers.length - 1; i >= 0; i--) {
     const number = damageNumbers[i], age = (now - number.born) / 1000;
     if (age > 1 || !room?.state.practice) { number.element.remove(); damageNumbers.splice(i, 1); continue; }
