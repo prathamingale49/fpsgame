@@ -16,13 +16,14 @@ export function recolorTop(input: string, output: string, mask: 'green' | 'blue'
     if (mask !== 'green') {
       // Both red (top) and blue (bottom) are Altium layer display colors.
       // Keep pads/markings distinct while giving both faces the physical mask.
-      const marking = r > 150 && g > 110 && b < 115;
+      const marking = (r > 65 && g > 65 && b < Math.min(r,g) * .65) || (r > 170 && g > 170 && b > 170);
       const hole = g > 90 && b > 90 && r < 145;
-      const pad = r > 105 && g < 115 && r > g * 1.5;
+      const pad = (r > 105 && g < 115 && r > g * 1.5) || (b > 150 && b > g * 1.5);
       if (marking) color = [235, 215, 50];
-      else if (!hole && !pad) {
+      else if (pad) color = [207, 161, 66];
+      else if (!hole) {
         const detail = Math.min(1, Math.max(r, b) / 255);
-        color = mask === 'blue' ? [8 + detail * 9, 15 + detail * 18, 65 + detail * 65] : [9 + detail * 15, 11 + detail * 17, 15 + detail * 20];
+        color = mask === 'blue' ? [14 + detail * 12, 25 + detail * 20, 105 + detail * 65] : [17 + detail * 20, 20 + detail * 22, 26 + detail * 26];
       }
     }
     png.data[i] = color[0]; png.data[i + 1] = color[1]; png.data[i + 2] = color[2];

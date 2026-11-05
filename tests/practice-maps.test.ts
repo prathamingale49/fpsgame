@@ -1,6 +1,6 @@
 import { expect, it } from 'vitest';
 import fs from 'node:fs';
-import { initialMotion, onBoard, PLAYER, stepMotion, surfaceMap, TICK, type MapData } from '../shared/game.js';
+import { initialMotion, onBoard, PLAYER, stepMotion, surfaceMap, transitionEdge, TICK, type MapData } from '../shared/game.js';
 
 for (const id of ['recovery', 'flight-sam']) it(`${id} has safe distributed spawns and a matching back surface`, () => {
   const map: MapData = JSON.parse(fs.readFileSync(`assets/public/maps/${id}.json`, 'utf8'));
@@ -21,4 +21,19 @@ it('Flight SAM has no floor across its side cutout', () => {
   const map: MapData = JSON.parse(fs.readFileSync('assets/public/maps/flight-sam.json', 'utf8'));
   expect(onBoard(map, map.width * .4, map.depth * .2)).toBe(false);
   expect(onBoard(map, -map.width * .4, map.depth * .2)).toBe(true);
+});
+
+for (const side of ['front', 'back'] as const) it(`flips at all Flight SAM slot edges from ${side} with cooldown protection`, () => {
+  const map: MapData = JSON.parse(fs.readFileSync('assets/public/maps/flight-sam.json', 'utf8'));
+  expect(map.flipEdges).toHaveLength(3);
+  for (const [ax,az,bx,bz,nx,nz] of map.flipEdges!) {
+    const sign=side==='back'?-1:1, x=(ax+bx)/2+nx*.1, z=((az+bz)/2+nz*.1)*sign;
+    const start={...initialMotion([x,0,z]),side};
+    const end=transitionEdge(start,map,PLAYER);
+    expect(end.side).toBe(side==='front'?'back':'front');
+    expect(end.grounded).toBe(true); expect(end.transitionCooldown).toBeGreaterThan(0);
+    expect(onBoard(map,end.x,end.z,end.side)).toBe(true);
+    const blocked=transitionEdge({...start,flipCooldown:2},map,PLAYER);
+    expect(blocked.side).toBe(side); expect(onBoard(map,blocked.x,blocked.z,side)).toBe(true);
+  }
 });

@@ -15,12 +15,14 @@ export class EdgeOrbit {
   private readonly destination = new THREE.Vector3();
   private readonly edgeLook = new THREE.Quaternion();
 
-  constructor(start: THREE.Vector3, map: MapData, readonly height: number, xEdge: boolean) {
+  constructor(start: THREE.Vector3, map: MapData, readonly height: number, xEdge: boolean, boundary?: { x: number; z: number; nx: number; nz: number }) {
     this.start = start.clone();
     this.thickness = map.back!.thickness;
     this.outward = xEdge ? new THREE.Vector3(Math.sign(start.x) || 1, 0, 0) : new THREE.Vector3(0, 0, Math.sign(start.z) || 1);
+    if (boundary) this.outward.set(boundary.nx, 0, boundary.nz);
     this.axis = new THREE.Vector3().crossVectors(new THREE.Vector3(0, 1, 0), this.outward);
     this.pivot = new THREE.Vector3(xEdge ? this.outward.x * map.width / 2 : start.x, -this.thickness / 2, xEdge ? start.z : this.outward.z * map.depth / 2);
+    if (boundary) this.pivot.set(boundary.x, -this.thickness / 2, boundary.z);
   }
 
   sample(t: number, target: THREE.Vector3, sourceLook: THREE.Quaternion, position: THREE.Vector3, orientation: THREE.Quaternion) {

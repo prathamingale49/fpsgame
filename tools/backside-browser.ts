@@ -6,7 +6,8 @@ import fs from 'node:fs';
 const browser = await chromium.launch({ headless: true, executablePath: 'C:/Program Files/Google/Chrome/Application/chrome.exe', args: process.env.BACKSIDE_RENDERER === 'hardware' ? ['--enable-webgl'] : ['--enable-webgl', '--use-gl=angle', '--use-angle=swiftshader', '--enable-unsafe-swiftshader'] });
 fs.mkdirSync('artifacts', { recursive: true });
 try {
-  for (const [edge, yaw] of [['north', 0], ['south', Math.PI], ['east', -Math.PI / 2], ['west', Math.PI / 2]] as const) {
+  const entries: [string, number][] = process.env.TEST_SLOT === '1' ? JSON.parse(fs.readFileSync('assets/public/maps/flight-sam.json', 'utf8')).flipEdges.map((edge: number[], i: number) => [`slot-${i}`, Math.atan2(-edge[4], -edge[5])]) : [['north', 0], ['south', Math.PI], ['east', -Math.PI / 2], ['west', Math.PI / 2]];
+  for (const [edge, yaw] of entries.filter(([edge]) => !process.env.TEST_ONLY_EDGE || edge === process.env.TEST_ONLY_EDGE)) {
     const port = 26688, base = `http://localhost:${port}`;
     const server = spawn(process.execPath, ['--import', 'tsx', 'tests/fixtures/bms-side-server.ts'], { env: { ...process.env, PORT: String(port), TEST_EDGE: edge, TEST_MAP_ID: process.env.TEST_MAP_ID || 'bms' }, stdio: 'pipe' });
     let logs = ''; server.stderr?.on('data', chunk => { logs += chunk; });

@@ -36,7 +36,7 @@ export type Box = { min: [number, number, number]; max: [number, number, number]
 export type Spawn = [number, number, number];
 export type BoardSide = 'front' | 'back';
 export type BoardBack = { boxes: Box[]; thickness: number; enabled: boolean };
-export type MapData = { id: string; title: string; width: number; depth: number; ground: number; surface?: number[]; backTexture?: string; boardColor?: string; boxes: Box[]; spawns: Spawn[]; back?: BoardBack; model?: string; texture?: string; components?: { ref: string; x: number; z: number; rotation: number; layer: string }[] };
+export type MapData = { id: string; title: string; width: number; depth: number; ground: number; surface?: number[]; backTexture?: string; boardColor?: string; flipEdges?: number[][]; boxes: Box[]; spawns: Spawn[]; back?: BoardBack; model?: string; texture?: string; components?: { ref: string; x: number; z: number; rotation: number; layer: string }[] };
 // Triangulated STEP substrate top, including its outline and cutouts.
 export function onBoard(map: MapData, x: number, z: number, side: BoardSide = 'front'): boolean {
   if (side === 'back') z = -z;
@@ -97,20 +97,35 @@ export function surfaceMap(map: MapData, side: BoardSide = 'front'): MapData {
   return back;
 }
 
+/** Nearest explicit interior boundary, expressed in the departing surface frame. */
+export function nearestFlipEdge(map: MapData, x: number, z: number, side: BoardSide = 'front') {
+  const sign = side === 'back' ? -1 : 1;
+  let best: { x: number; z: number; nx: number; nz: number; distance: number } | undefined;
+  for (const [ax,az,bx,bz,nx,nz] of map.flipEdges ?? []) {
+    const dx=bx-ax, dz=(bz-az)*sign, sx=ax, sz=az*sign;
+    const t=clamp(((x-sx)*dx+(z-sz)*dz)/(dx*dx+dz*dz),0,1);
+    const px=sx+t*dx, pz=sz+t*dz, distance=Math.hypot(x-px,z-pz);
+    if (!best || distance<best.distance) best={x:px,z:pz,nx,nz:nz*sign,distance};
+  }
+  return best;
+}
+
 export function transitionEdge(motion: Motion, map: MapData, tuning: PlayerTuning): Motion {
   if (!map.back?.enabled) return motion;
+  const edge = nearestFlipEdge(map, motion.x, motion.z, motion.side);
+  const slot = edge && edge.distance < 3 && !onBoard(map, motion.x, motion.z, motion.side) ? edge : undefined;
+  if (slot && ((motion.transitionCooldown ?? 0) > 0 || (motion.flipCooldown ?? 0) > 0)) return { ...motion, x: slot.x-slot.nx*(tuning.radius+.3), z: slot.z-slot.nz*(tuning.radius+.3) };
   if ((motion.transitionCooldown ?? 0) > 0 || (motion.flipCooldown ?? 0) > 0) return { ...motion,
     x: clamp(motion.x, -map.width / 2 + tuning.radius, map.width / 2 - tuning.radius),
     z: clamp(motion.z, -map.depth / 2 + tuning.radius, map.depth / 2 - tuning.radius) };
-  const xOutside = Math.abs(motion.x) > map.width / 2;
+  const xOutside = slot ? Math.abs(slot.nx) > .5 : Math.abs(motion.x) > map.width / 2;
   const zOutside = Math.abs(motion.z) > map.depth / 2;
-  if (!xOutside && !zOutside) return motion;
-  // Cutouts have no floor; outer edges retain the established board flip.
+  if (!slot && !xOutside && !zOutside) return motion;
   const side = motion.side === 'back' ? 'front' : 'back';
   const margin = tuning.radius + .3;
-  const x = clamp(motion.x, -map.width / 2 + margin, map.width / 2 - margin);
+  const x = slot ? slot.x-slot.nx*margin : clamp(motion.x, -map.width / 2 + margin, map.width / 2 - margin);
   // The same physical edge changes local Z sign after rotation about X.
-  const z = clamp(-motion.z, -map.depth / 2 + margin, map.depth / 2 - margin);
+  const z = slot ? -(slot.z-slot.nz*margin) : clamp(-motion.z, -map.depth / 2 + margin, map.depth / 2 - margin);
   let y = map.ground;
   for (const box of surfaceMap(map, side).boxes) if (touches(x, z, box, tuning.radius + .02)) y = Math.max(y, box.max[1]);
   // X edges retain their sign in the rotated frame: turn the view inward.

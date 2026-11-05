@@ -33,6 +33,23 @@ for (let i = 0; i < indices.length; i += 3) {
   if (vertices.every(v => Math.abs(v[1]) < .001)) map.surface.push(...vertices.flatMap(v => [v[0], v[2]]));
 }
 if (!map.surface.length) throw new Error('No substrate surface triangles');
+// Keep long interior boundary segments for slot flips; small drilled holes are excluded.
+const edges = new Map<string, { points: number[]; count: number }>();
+for (let i=0;i<map.surface.length;i+=6) {
+  const points=[0,2,4].map(j=>map.surface!.slice(i+j,i+j+2).map(v=>Math.round(v*1e4)/1e4));
+  for(let j=0;j<3;j++) {
+    const a=points[j],b=points[(j+1)%3], key=[a.join(','),b.join(',')].sort().join('|');
+    const existing=edges.get(key); if(existing) existing.count++; else edges.set(key,{points:[...a,...b],count:1});
+  }
+}
+map.flipEdges=[];
+for (const {points:[ax,az,bx,bz],count} of edges.values()) {
+  const length=Math.hypot(bx-ax,bz-az),mx=(ax+bx)/2,mz=(az+bz)/2;
+  if(count!==1 || length<5 || Math.abs(mx)>map.width/2-2 || Math.abs(mz)>map.depth/2-2) continue;
+  let nx=-(bz-az)/length,nz=(bx-ax)/length;
+  if(onBoard(map,mx+nx*.1,mz+nz*.1)) {nx=-nx;nz=-nz;}
+  map.flipEdges.push([ax,az,bx,bz,nx,nz]);
+}
 // Artwork exports have a gray viewport margin. Crop to the dark substrate
 // extent (excluding yellow mechanical circles outside Flight SAM's corners).
 function artwork(source: string, output: string) {

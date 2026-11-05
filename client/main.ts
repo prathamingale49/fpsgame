@@ -2,7 +2,7 @@ import * as THREE from 'three';
 import { PRACTICE_MAPS } from '../shared/maps';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 import { Client, type Room } from '@colyseus/sdk';
-import { aimRay, collisionCacheStats, movementYaw, samplePosition, hitscan, COMBAT, DEV_SCALE, EDGE_FLIP_SECONDS, FLIP_COOLDOWN_SECONDS, JUMP_HEIGHT_RATIO, PLAYER, initialMotion, MOVEMENT_PROTOCOL, stepMotion, testMap, TICK, WEAPON, tuningForHeight, type Input, type MapData, type Motion, type BoardSide, type PositionSample, type ShotInput } from '../shared/game';
+import { nearestFlipEdge, aimRay, collisionCacheStats, movementYaw, samplePosition, hitscan, COMBAT, DEV_SCALE, EDGE_FLIP_SECONDS, FLIP_COOLDOWN_SECONDS, JUMP_HEIGHT_RATIO, PLAYER, initialMotion, MOVEMENT_PROTOCOL, stepMotion, testMap, TICK, WEAPON, tuningForHeight, type Input, type MapData, type Motion, type BoardSide, type PositionSample, type ShotInput } from '../shared/game';
 import type { MatchState, PlayerState } from '../server/state';
 import './style.css';
 import { WEAPONS, WEAPON_IDS, CHARGE, HEAT, type WeaponId } from '../shared/weapons';
@@ -639,7 +639,8 @@ function frame(now: number) {
       if (map.back?.enabled && me?.alive && (local.transitionCooldown ?? 0) > 0 && !boardFlip) {
         // Heading changes only at X edges. Use the actual crossed edge, including corners.
         const xEdge = Math.abs((local.headingOffset ?? 0) - renderedHeading) > 1;
-        boardFlip = { orbit: new EdgeOrbit(camera.position, map, playerTuning.height, xEdge), started: now,
+        const boundary = nearestFlipEdge(map, camera.position.x, camera.position.z, visualSide);
+        boardFlip = { orbit: new EdgeOrbit(camera.position, map, playerTuning.height, xEdge, boundary && boundary.distance < 3 ? boundary : undefined), started: now,
           sourceHeading: renderedHeading, progress: 0 };
       } else boardFlip = null; // Respawn/reconnect is not an edge crossing.
       visualSide = side;
