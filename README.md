@@ -230,3 +230,5 @@ For Windows PowerShell, all the commands above work as written, including paths 
 - `tests/`: movement, combat, and multiplayer integration checks.
 
 The collision map uses axis-aligned boxes; oblique parts may feel wider than they appear. The current hit validation uses the server's live player positions, so high latency can disadvantage moving targets. Future improvements: lag-compensated hit rewind, custom player animation/audio, better map texture color grading, collision inspection in a level editor, and a room directory for discovery.
+
+Edge flips recharge for 5 seconds from takeoff. The HUD bar fills until FLIP READY; movement and shooting resume after the 0.9-second orbit. Board edges hold you on your current side while recharging.

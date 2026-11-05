@@ -7,7 +7,7 @@ export const PlayerState = schema({
   heat: t.float32().default(0), overheated: t.boolean().default(false),
   chargeStarted: t.float64().default(0), weaponReadyAt: t.float64().default(0),
   triggerHeld: t.boolean().default(false),
-  side: t.string().default('front'), transitionCooldown: t.float32().default(0), headingOffset: t.float32().default(0),
+  side: t.string().default('front'), transitionCooldown: t.float32().default(0), flipCooldown: t.float32().default(0), headingOffset: t.float32().default(0),
   x: t.float32().default(0), y: t.float32().default(0), z: t.float32().default(0),
   vy: t.float32().default(0), grounded: t.boolean().default(true), jumpHeld: t.boolean().default(false), mantleTarget: t.float32().default(0),
   yaw: t.float32().default(0), pitch: t.float32().default(0),
