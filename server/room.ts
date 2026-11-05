@@ -277,6 +277,12 @@ export class GameRoom extends Room {
       const x = origin.x + Math.sin(angle) * radius, z = origin.z - Math.cos(angle) * radius;
       if (Math.abs(x) > activeMap.width / 2 - 2 || Math.abs(z) > activeMap.depth / 2 - 2) continue;
       if (activeMap.boxes.some(b => x + this.playerTuning.radius > b.min[0] && x - this.playerTuning.radius < b.max[0] && z + this.playerTuning.radius > b.min[2] && z - this.playerTuning.radius < b.max[2])) continue;
+      let reachable = true;
+      for (let step = 1; step <= Math.ceil(radius * 4); step++) {
+        const t = step / Math.ceil(radius * 4), px = origin.x + (x - origin.x) * t, pz = origin.z + (z - origin.z) * t;
+        if (activeMap.boxes.some(b => px + this.playerTuning.radius > b.min[0] && px - this.playerTuning.radius < b.max[0] && pz + this.playerTuning.radius > b.min[2] && pz - this.playerTuning.radius < b.max[2])) { reachable = false; break; }
+      }
+      if (!reachable) continue;
       if ([...this.state.players.values()].some(p => p.npc && Math.hypot(p.x - x, p.z - z) < 1)) continue;
       return [x, activeMap.ground, z];
     }
@@ -291,6 +297,7 @@ export class GameRoom extends Room {
       this.runtime.set(id, { queue: new Map(), lastReceived: 0, lastSeq: 0, credit: 0, lastShot: -Infinity, lastShotId: -1, reloadAt: 0, respawnAt: 0 });
     }
   }
+  onDispose() { this.bots.clear(); this.runtime.clear(); this.hitHistory.clear(); }
 }
 
 export class PracticeRoom extends GameRoom { practice = true; }
