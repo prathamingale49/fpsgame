@@ -232,8 +232,46 @@ function sound(frequency: number, duration: number, wave: OscillatorType = 'sawt
   } catch { /* audio unavailable */ }
 }
 
-function showFeed(text: string) {
-  const item = document.createElement('div'); item.textContent = text; el('kill-feed').prepend(item);
+let eliminationTimer: ReturnType<typeof setTimeout> | undefined;
+function clearElimination() {
+  clearTimeout(eliminationTimer);
+  el('elimination').classList.add('hidden');
+}
+function showElimination(msg: { name: string; chain: number }) {
+  clearTimeout(eliminationTimer);
+  el('elimination-name').textContent = msg.name;
+  el('elimination-chain').textContent = msg.chain === 2 ? 'DOUBLE KILL' : msg.chain === 3 ? 'TRIPLE KILL' : msg.chain > 3 ? `${msg.chain} KILL STREAK` : '';
+  el('elimination').classList.remove('hidden');
+  eliminationTimer = setTimeout(clearElimination, 2200);
+  // A clean rising chord distinguishes an elimination from the short hit tick.
+  if (volume <= 0) return;
+  try {
+    audioContext ??= new AudioContext();
+    if (audioContext.state === 'suspended') void audioContext.resume();
+    const notes = msg.chain >= 3 ? [660, 880, 1100, 1320] : msg.chain === 2 ? [660, 880, 1100] : [660, 990];
+    notes.forEach((frequency, i) => {
+      const at = audioContext!.currentTime + i * .065;
+      const oscillator = audioContext!.createOscillator(), gain = audioContext!.createGain();
+      oscillator.type = 'sine'; oscillator.frequency.setValueAtTime(frequency, at);
+      gain.gain.setValueAtTime(.001, at); gain.gain.linearRampToValueAtTime(volume * .1, at + .008);
+      gain.gain.exponentialRampToValueAtTime(.001, at + .18);
+      oscillator.connect(gain).connect(audioContext!.destination);
+      oscillator.onended = () => { oscillator.disconnect(); gain.disconnect(); };
+      oscillator.start(at); oscillator.stop(at + .19);
+    });
+  } catch { /* audio unavailable */ }
+}
+function showFeed(text: string, chain = 1) {
+  const item = document.createElement('div');
+  const message = document.createElement('span'); message.textContent = text; item.append(message);
+  if (chain >= 2) {
+    item.classList.add('feed-streak');
+    if (chain >= 3) item.classList.add('feed-streak-hot');
+    const badge = document.createElement('strong'); badge.className = 'feed-streak-badge';
+    badge.textContent = `x${chain}`; badge.setAttribute('aria-label', `${chain} consecutive eliminations`);
+    item.append(badge);
+  }
+  el('kill-feed').prepend(item);
   setTimeout(() => item.remove(), 5000);
   while (el('kill-feed').children.length > 5) el('kill-feed').lastElementChild?.remove();
 }
@@ -314,7 +352,7 @@ function syncState(state: MatchState) {
       playCorrections.push(correction); if (playCorrections.length > 2400) playCorrections.splice(0, 1200);
     }
     recordMovement('snapshot', me.ack, correction);
-    if (!me.alive) { local = authoritative; pending = []; }
+    if (!me.alive) { clearElimination(); local = authoritative; pending = []; }
   }
   const present = new Set<string>();
   state.players.forEach((p, id) => {
@@ -372,7 +410,8 @@ async function connect(mode: 'play' | 'create' | 'join' | 'reconnect' | 'practic
     el('room-label').style.pointerEvents = 'auto'; el('room-label').style.cursor = 'pointer';
     history.replaceState(null, '', `?room=${room.roomId}`);
     room.onStateChange(syncState);
-    room.onMessage('feed', (msg: { text: string }) => showFeed(msg.text));
+    room.onMessage('elimination', (msg: { name: string; chain: number }) => showElimination(msg));
+    room.onMessage('feed', (msg: { text: string; chain?: number }) => showFeed(msg.text, msg.chain));
     room.onMessage('shot', (msg: { shooter: string; shotId?: number; side: BoardSide; from: number[]; to: number[]; hit?: string }) => {
       if (msg.side === (local.side ?? 'front')) {
         const predicted = msg.shooter === room?.sessionId && msg.shotId !== undefined ? predictedTracers.get(msg.shotId) : undefined;
@@ -397,9 +436,10 @@ async function connect(mode: 'play' | 'create' | 'join' | 'reconnect' | 'practic
     room.onMessage('pickup', (msg: { player: string; amount: number }) => { if (msg.player === room?.sessionId) { showFeed(`+${msg.amount} solder rounds`); sound(710, .16, 'sine'); } });
     room.onDrop(() => { recordMovement('drop', me?.ack ?? 0); mouseDown = false; pending = []; lastSentInput = null; showFeed('Connection lost · reconnecting'); });
     room.onReconnect(() => { const ack = room!.state.players.get(room!.sessionId)?.ack ?? seq; recordMovement('reconnect', ack); pending = []; lastSentInput = null; seq = ack; serverClockOffsetMs = NaN; sessionStorage.setItem('pcb-reconnection-token', room!.reconnectionToken); syncState(room!.state); showFeed('Connection restored'); });
-    room.onLeave(() => { sessionStorage.removeItem('pcb-reconnection-token'); room = null; scalePanel.hidden = true; el('menu').classList.remove('hidden'); el('hud').classList.add('hidden'); document.exitPointerLock(); showFeed('Disconnected from room'); });
+    room.onLeave(() => { clearElimination(); sessionStorage.removeItem('pcb-reconnection-token'); room = null; scalePanel.hidden = true; el('menu').classList.remove('hidden'); el('hud').classList.add('hidden'); document.exitPointerLock(); showFeed('Disconnected from room'); });
     sessionStorage.setItem('pcb-reconnection-token', room.reconnectionToken);
     if (room.state?.players) syncState(room.state);
+    clearElimination();
     visualSide = local.side ?? 'front'; boardFlip = null; renderedHeading = local.headingOffset ?? 0;
     el('menu').classList.add('hidden'); el('hud').classList.remove('hidden');
     if (devScaleEnabled) showFeed('DEV SCALE enabled · press F4 to adjust height');
