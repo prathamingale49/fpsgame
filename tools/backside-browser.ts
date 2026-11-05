@@ -3,7 +3,7 @@ import { spawn } from 'node:child_process';
 import { setTimeout as delay } from 'node:timers/promises';
 import fs from 'node:fs';
 
-const browser = await chromium.launch({ headless: true, executablePath: 'C:/Program Files/Google/Chrome/Application/chrome.exe', args: ['--enable-webgl', '--use-gl=angle', '--use-angle=swiftshader', '--enable-unsafe-swiftshader'] });
+const browser = await chromium.launch({ headless: true, executablePath: 'C:/Program Files/Google/Chrome/Application/chrome.exe', args: process.env.BACKSIDE_RENDERER === 'hardware' ? ['--enable-webgl'] : ['--enable-webgl', '--use-gl=angle', '--use-angle=swiftshader', '--enable-unsafe-swiftshader'] });
 fs.mkdirSync('artifacts', { recursive: true });
 try {
   for (const [edge, yaw] of [['north', 0], ['south', Math.PI], ['east', -Math.PI / 2], ['west', Math.PI / 2]] as const) {
@@ -60,7 +60,7 @@ try {
       if (Math.abs(front.cameraRoll) > .001 || front.worldRotation !== 0) throw new Error('Front camera/world orientation wrong');
       await a.screenshot({ path: `artifacts/bms-front-${edge}.png` });
       const frames = await a.evaluate(() => (window as any).__orbitFrames) as { t: number; world: number; position: number[] }[];
-      if (frames.length < 8 || !frames.some(f => f.t > .2 && f.t < .8)) throw new Error('Orbit was not rendered');
+      if (frames.length < 8 || !frames.some(f => f.t > .2 && f.t < .8)) throw new Error(`Insufficient orbit frames: ${JSON.stringify(frames.map(f => f.t))}`);
       if (frames.some(f => Math.abs(f.world) > .001 && Math.abs(f.world - Math.PI) > .001)) throw new Error('Board spun during orbit');
       console.log(JSON.stringify({ edge, orbitFrames: frames.length }));
       if (errors.length) throw new Error(errors.join('\n'));

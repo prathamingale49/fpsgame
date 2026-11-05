@@ -1,4 +1,11 @@
-# PCB FPS
+# YJSPS
+
+YJSP + FPS: **YJS** in white, **PS** in gold. Click **SOLO PRACTICE** to start
+a private, untimed session with five rocket targets: one stationary, two walking,
+and two dynamic. Targets use the normal server shooting rules and respawn after
+three seconds. F5 toggles cyan shooting hitboxes; F6 freezes/resumes NPCs.
+Damage numbers and overhead health bars show confirmed hits. Exit to the menu
+to play regular multiplayer. Practice rooms never enter public matchmaking.
 
 Browser first-person deathmatch on a real YJSP Battery Management System (BMS) PCB. The frontend uses Three.js and Vite; a Colyseus/Node.js server owns player movement, collisions, weapons, and multiplayer game state.
 

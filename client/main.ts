@@ -7,6 +7,14 @@ import './style.css';
 import { EdgeOrbit } from './edge-orbit';
 
 const el = <T extends HTMLElement>(id: string) => document.getElementById(id) as T;
+document.title = 'YJSPS · YJSP';
+for (const brand of Array.from(document.querySelectorAll('.brand, .menu-card h1'))) brand.innerHTML = 'YJS<span>PS</span>';
+const practiceButton = document.createElement('button'); practiceButton.id = 'practice'; practiceButton.textContent = 'SOLO PRACTICE';
+el('create').parentElement!.after(practiceButton);
+practiceButton.style.cssText = 'width:100%;margin-top:8px;padding:15px;background:#323332;color:#e0a500;border:1px solid #e0a500;font-weight:700;cursor:pointer';
+let showNpcHitboxes = false;
+const npcHitboxes = new Map<string, THREE.Box3Helper>();
+const damageNumbers: { element: HTMLElement; position: THREE.Vector3; born: number }[] = [];
 const canvas = el<HTMLCanvasElement>('game');
 const renderer = new THREE.WebGLRenderer({ canvas, antialias: true, powerPreference: 'high-performance' });
 let quality = localStorage.getItem('pcb-quality') || 'balanced';
@@ -343,7 +351,7 @@ function syncState(state: MatchState) {
 
 const endpoint = `${location.protocol === 'https:' ? 'wss' : 'ws'}://${location.hostname}:${import.meta.env.DEV ? '2567' : location.port || (location.protocol === 'https:' ? '443' : '80')}`;
 const client = new Client(endpoint);
-async function connect(mode: 'play' | 'create' | 'join' | 'reconnect') {
+async function connect(mode: 'play' | 'create' | 'join' | 'reconnect' | 'practice') {
   el('error').textContent = '';
   const name = (el<HTMLInputElement>('name').value || 'Engineer').trim().slice(0, 18);
   const code = el<HTMLInputElement>('code').value.trim().toUpperCase();
@@ -354,7 +362,7 @@ async function connect(mode: 'play' | 'create' | 'join' | 'reconnect') {
     devScaleEnabled = health.devScaleEnabled === true;
     const token = sessionStorage.getItem('pcb-reconnection-token');
     const options = { name, protocol: MOVEMENT_PROTOCOL };
-    room = mode === 'reconnect' && token ? await client.reconnect<MatchState>(token) : mode === 'join' ? await client.joinById<MatchState>(code, options) : mode === 'create' ? await client.create<MatchState>('pcb', options) : await client.joinOrCreate<MatchState>('pcb', options);
+    room = mode === 'practice' ? await client.create<MatchState>('practice', options) : mode === 'reconnect' && token ? await client.reconnect<MatchState>(token) : mode === 'join' ? await client.joinById<MatchState>(code, options) : mode === 'create' ? await client.create<MatchState>('pcb', options) : await client.joinOrCreate<MatchState>('pcb', options);
     const me = room.state?.players?.get(room.sessionId);
     pending = []; lastSentInput = null; nextInputAt = performance.now(); seq = me?.ack ?? 0; yaw = me?.yaw ?? 0; pitch = me?.pitch ?? 0;
     const response = await fetch('/api/map');
@@ -377,7 +385,15 @@ async function connect(mode: 'play' | 'create' | 'join' | 'reconnect') {
       }
       if (msg.shooter === room?.sessionId && msg.hit) flashHit();
     });
-    room.onMessage('damage', (msg: { target: string }) => { if (msg.target === room?.sessionId) flashDamage(); });
+    room.onMessage('damage', (msg: { target: string; amount: number }) => {
+      if (msg.target === room?.sessionId) flashDamage();
+      const target = room?.state.players.get(msg.target);
+      if (room?.state.practice && target?.npc && target.side === local.side) {
+        const element = document.createElement('div'); element.textContent = `-${msg.amount}`;
+        element.style.cssText = 'position:fixed;left:0;top:0;color:#ffd24a;font:bold 22px monospace;pointer-events:none;z-index:4';
+        document.body.append(element); damageNumbers.push({ element, position: new THREE.Vector3(target.x, target.y + playerTuning.height, target.z), born: performance.now() });
+      }
+    });
     room.onMessage('pickup', (msg: { player: string; amount: number }) => { if (msg.player === room?.sessionId) { showFeed(`+${msg.amount} solder rounds`); sound(710, .16, 'sine'); } });
     room.onDrop(() => { recordMovement('drop', me?.ack ?? 0); mouseDown = false; pending = []; lastSentInput = null; showFeed('Connection lost · reconnecting'); });
     room.onReconnect(() => { const ack = room!.state.players.get(room!.sessionId)?.ack ?? seq; recordMovement('reconnect', ack); pending = []; lastSentInput = null; seq = ack; serverClockOffsetMs = NaN; sessionStorage.setItem('pcb-reconnection-token', room!.reconnectionToken); syncState(room!.state); showFeed('Connection restored'); });
@@ -391,6 +407,12 @@ async function connect(mode: 'play' | 'create' | 'join' | 'reconnect') {
   } catch (error) { if (mode === 'reconnect') sessionStorage.removeItem('pcb-reconnection-token'); el('error').textContent = error instanceof Error ? error.message : String(error); }
 }
 el('play').onclick = () => connect('play'); el('create').onclick = () => connect('create'); el('join').onclick = () => connect('join');
+practiceButton.onclick = () => connect('practice');
+document.addEventListener('keydown', e => {
+  if (!room?.state.practice || e.repeat) return;
+  if (e.code === 'F5') { e.preventDefault(); showNpcHitboxes = !showNpcHitboxes; showFeed(`NPC HITBOXES ${showNpcHitboxes ? 'ON' : 'OFF'}`); }
+  if (e.code === 'F6') { e.preventDefault(); room.send('practice:movement'); }
+});
 el('leave').onclick = () => { sessionStorage.removeItem('pcb-reconnection-token'); room?.leave(); };
 el('room-label').onclick = () => { if (!room) return; navigator.clipboard.writeText(location.href).then(() => showFeed('Invite link copied')); };
 el('controls-toggle').onclick = () => { el('menu-detail').classList.remove('hidden'); el('menu-detail').innerHTML = 'WASD move · Mouse aim · Click shoot · Space jump · Shift sprint · R reload · Tab scoreboard · Esc pause'; };
@@ -514,6 +536,27 @@ function frame(now: number) {
     entry.healthFill.material.color.setHSL(fraction * .34, .85, .48);
     entry.healthBar.position.set(entry.mesh.position.x, entry.mesh.position.y + playerTuning.height + .3, entry.mesh.position.z);
     entry.healthBar.quaternion.copy(camera.quaternion);
+  }
+  for (const [id, helper] of npcHitboxes) if (!room?.state.practice || !remotes.has(id)) { scene.remove(helper); helper.dispose(); npcHitboxes.delete(id); }
+  if (room?.state.practice) {
+    el('timer').textContent = 'PRACTICE';
+    el('player-count').textContent = `5 NPC TARGETS · F5 HITBOXES · F6 ${room.state.npcMovement ? 'FREEZE' : 'RESUME'}`;
+    for (const [id, entry] of remotes) {
+      if (!room.state.players.get(id)?.npc) continue;
+      let helper = npcHitboxes.get(id);
+      if (!helper) { helper = new THREE.Box3Helper(new THREE.Box3(), 0x00ffff); scene.add(helper); npcHitboxes.set(id, helper); }
+      const radius = playerTuning.radius * COMBAT.hitRadiusScale;
+      helper.box.setFromCenterAndSize(entry.mesh.position.clone().add(new THREE.Vector3(0, playerTuning.height / 2, 0)), new THREE.Vector3(radius * 2, playerTuning.height * COMBAT.hitHeightScale, radius * 2));
+      helper.visible = showNpcHitboxes && entry.mesh.visible;
+    }
+  }
+  for (let i = damageNumbers.length - 1; i >= 0; i--) {
+    const number = damageNumbers[i], age = (now - number.born) / 1000;
+    if (age > 1 || !room?.state.practice) { number.element.remove(); damageNumbers.splice(i, 1); continue; }
+    const projected = number.position.clone().add(new THREE.Vector3(0, age, 0)).project(camera);
+    number.element.style.display = boardFlip || projected.z > 1 ? 'none' : '';
+    number.element.style.transform = `translate(${(projected.x + 1) * innerWidth / 2}px,${(1 - projected.y) * innerHeight / 2}px)`;
+    number.element.style.opacity = String(1 - age);
   }
   for (let i = shots.length - 1; i >= 0; i--) if (now - shots[i].born > 120) {
     for (const [id, predicted] of predictedTracers) if (predicted === shots[i].line) predictedTracers.delete(id);
