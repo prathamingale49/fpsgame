@@ -1,7 +1,7 @@
 import * as THREE from 'three';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 import { Client, type Room } from '@colyseus/sdk';
-import { aimRay, collisionCacheStats, movementYaw, samplePosition, hitscan, COMBAT, DEV_SCALE, EDGE_FLIP_SECONDS, JUMP_HEIGHT_RATIO, PLAYER, initialMotion, MOVEMENT_PROTOCOL, stepMotion, testMap, TICK, WEAPON, tuningForHeight, type Input, type MapData, type Motion, type BoardSide, type PositionSample, type ShotInput } from '../shared/game';
+import { aimRay, collisionCacheStats, movementYaw, samplePosition, hitscan, COMBAT, DEV_SCALE, EDGE_FLIP_SECONDS, FLIP_COOLDOWN_SECONDS, JUMP_HEIGHT_RATIO, PLAYER, initialMotion, MOVEMENT_PROTOCOL, stepMotion, testMap, TICK, WEAPON, tuningForHeight, type Input, type MapData, type Motion, type BoardSide, type PositionSample, type ShotInput } from '../shared/game';
 import type { MatchState, PlayerState } from '../server/state';
 import './style.css';
 import { EdgeOrbit } from './edge-orbit';
@@ -126,7 +126,7 @@ let maxPending = 0, maxCorrection = 0;
   side: local.side ?? 'front', authoritativeSide: room?.state.players.get(room.sessionId)?.side,
   testRemaining: testMove?.remaining ?? 0,
   cameraRoll: camera.rotation.z, worldRotation: world.rotation.x,
-  orbitProgress: boardFlip?.progress ?? null, cameraPosition: camera.position.toArray(), cameraQuaternion: camera.quaternion.toArray(),
+  flipCooldown: local.flipCooldown ?? 0, orbitProgress: boardFlip?.progress ?? null, cameraPosition: camera.position.toArray(), cameraQuaternion: camera.quaternion.toArray(),
 });
 (window as unknown as { __pcbResetPerfWindow: () => void }).__pcbResetPerfWindow = () => { frameTimes.length = 0; playCorrections.length = 0; };
 let wasReloading = false;
@@ -305,7 +305,7 @@ function syncState(state: MatchState) {
     if (me.reloading && !wasReloading) sound(570, .22, 'triangle');
     wasReloading = me.reloading;
     const before = local;
-    const authoritative: Motion = { x: me.x, y: me.y, z: me.z, vy: me.vy, grounded: me.grounded, jumpHeld: me.jumpHeld, mantleTarget: me.mantleTarget, side: me.side as BoardSide, transitionCooldown: me.transitionCooldown, headingOffset: me.headingOffset };
+    const authoritative: Motion = { x: me.x, y: me.y, z: me.z, vy: me.vy, grounded: me.grounded, jumpHeld: me.jumpHeld, mantleTarget: me.mantleTarget, side: me.side as BoardSide, transitionCooldown: me.transitionCooldown, flipCooldown: me.flipCooldown, headingOffset: me.headingOffset };
     pending = pending.filter(input => input.seq > me.ack);
     local = pending.reduce((motion, input) => stepMotion(motion, input, map, TICK, undefined, playerTuning), authoritative);
     correction = Math.hypot(local.x - before.x, local.y - before.y, local.z - before.z);
@@ -453,7 +453,7 @@ setInterval(() => {
     sprint: soakMode || (!testing && locked && (keys.has('ShiftLeft') || keys.has('ShiftRight'))) };
   if (soakMode) soakTick++;
   if (testing && --testMove!.remaining === 0) testMove = null;
-  const repeatedIdle = local.grounded && local.mantleTarget === 0 && (local.transitionCooldown ?? 0) === 0 && input.forward === 0 && input.strafe === 0 && !input.jump && !input.sprint && lastSentInput
+  const repeatedIdle = (local.flipCooldown ?? 0) === 0 && local.grounded && local.mantleTarget === 0 && (local.transitionCooldown ?? 0) === 0 && input.forward === 0 && input.strafe === 0 && !input.jump && !input.sprint && lastSentInput
     && lastSentInput.forward === 0 && lastSentInput.strafe === 0 && !lastSentInput.jump && !lastSentInput.sprint
     && lastSentInput.yaw === input.yaw && lastSentInput.pitch === input.pitch;
   if (repeatedIdle) return;
@@ -511,6 +511,12 @@ function frame(now: number) {
     gunView.visible = true;
     canvas.dataset.side = side;
     el('side-label').textContent = side.toUpperCase();
+    const cooldown = Math.max(0, local.flipCooldown ?? 0);
+    el('flip-cooldown').hidden = !map.back?.enabled;
+    el('flip-cooldown-label').textContent = cooldown > 0 ? `FLIP - ${cooldown.toFixed(1)}s` : 'FLIP READY';
+    el('flip-cooldown-fill').style.width = `${100 * (1 - cooldown / FLIP_COOLDOWN_SECONDS)}%`;
+    el('flip-cooldown-meter').setAttribute('aria-valuenow', String(Math.round(100 * (1 - cooldown / FLIP_COOLDOWN_SECONDS))));
+    el('flip-cooldown-meter').setAttribute('aria-valuetext', cooldown > 0 ? `${cooldown.toFixed(1)} seconds until flip ready` : 'Flip ready');
     // Prediction may switch surfaces before the next snapshot arrives.
     for (const [id, entry] of remotes) {
       const visible = !boardFlip && snapshot.players.get(id)?.side === side;

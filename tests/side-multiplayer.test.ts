@@ -23,7 +23,7 @@ it('synchronizes repeated wraps without deaths and isolates combat between surfa
     let seqA = 0, seqB = 0;
     const move = async (room: Room<MatchState>, count: number, forward: number, yaw = 0) => {
       const p = room.state.players.get(room.sessionId)!;
-      let predicted: Motion = { x: p.x, y: p.y, z: p.z, vy: p.vy, grounded: p.grounded, jumpHeld: p.jumpHeld, mantleTarget: p.mantleTarget, side: p.side as 'front' | 'back', transitionCooldown: p.transitionCooldown, headingOffset: p.headingOffset };
+      let predicted: Motion = { x: p.x, y: p.y, z: p.z, vy: p.vy, grounded: p.grounded, jumpHeld: p.jumpHeld, mantleTarget: p.mantleTarget, side: p.side as 'front' | 'back', transitionCooldown: p.transitionCooldown, flipCooldown: p.flipCooldown, headingOffset: p.headingOffset };
       const predictionMap = { ...testMap, width: 12, depth: 12, boxes: [], back: { enabled: true, thickness: 1.6, boxes: [] } };
       for (let i = 0; i < count; i++) {
         const seq = room === a ? ++seqA : ++seqB;
@@ -65,10 +65,10 @@ it('synchronizes repeated wraps without deaths and isolates combat between surfa
     a!.send('shoot');
     await wait(() => pb().hp === 75 && b!.state.players.get(b!.sessionId)?.hp === 75);
     const remainingAmmo = pa().ammo;
-    await move(a!, 95, 1, 0);
+    await move(a!, 310, 1, 0);
     await wait(() => pa().side === 'front' && b!.state.players.get(a!.sessionId)?.side === 'front');
     expect(pa().deaths).toBe(0); expect(pa().kills).toBe(0);
     expect(pa().hp).toBe(100); expect(pa().ammo).toBe(remainingAmmo);
     expect(a!.state.phase).toBe('playing');
   } finally { await a?.leave(); await b?.leave(); server.kill(); }
-}, 22000);
+}, 30000);
