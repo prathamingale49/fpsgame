@@ -1,5 +1,19 @@
 # YJSPS
 
+Two solo configurations are available: **SOLO PRACTICE** is the weapon sandbox
+(keys **1–4**), while **PICKUP PRACTICE** starts with the Blaster and lets you
+carry one special weapon. Press **E** at a floating weapon to collect/replace it
+and **Q** to swap between your permanent Blaster and carried special. Pickups
+respawn after 15 seconds; death/respawn restores the Blaster-only inventory.
+Weapon pickups use reachable clear-floor locations on the map's front/back
+surfaces and never appear in public multiplayer. Ammo pickups remain separate.
+
+Each gun has a distinct procedural model and animation: Blaster recoil/heated
+barrel, Iron pullback/compression with progressively lit violet coils, Hot Air
+turbine/heat glow, and Pump spring/plunger action. Visual motion never changes
+aim or damage. Kill messages are weapon-specific: **reflowed**, **precision-soldered**,
+**heat-soaked**, and **desoldered**, respectively.
+
 Solo Practice weapons: **1** Solder Blaster (automatic), **2** Precision Iron
 (hold to charge, release to fire), **3** Hot Air Rework Gun (hold for a short
 cone; overheats after about 3 seconds and cools in about 2), **4** Desoldering

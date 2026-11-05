@@ -14,7 +14,7 @@ function box(w: number, h: number, d: number) { return cached(`b${w},${h},${d}`,
 function cylinder(r: number, length: number) { return cached(`c${r},${length}`, () => new THREE.CylinderGeometry(r, r, length, 12)); }
 function ring(r: number) { return cached(`r${r}`, () => new THREE.TorusGeometry(r, .018, 6, 16)); }
 function glow(color: string) { return new THREE.MeshStandardMaterial({ color, emissive: color, emissiveIntensity: .5, roughness: .3, metalness: .4 }); }
-export type WeaponModel = { id: WeaponId; root: THREE.Group; barrel: THREE.Group; coils: THREE.Mesh<THREE.BufferGeometry, THREE.MeshStandardMaterial>[]; chamber: THREE.MeshStandardMaterial; fan: THREE.Group; plunger: THREE.Group; flash: THREE.Mesh; kick: number; time: number; lastFire: number };
+export type WeaponModel = { id: WeaponId; root: THREE.Group; barrel: THREE.Group; coils: THREE.Mesh<THREE.BufferGeometry, THREE.MeshStandardMaterial>[]; chamber: THREE.MeshStandardMaterial; fan: THREE.Group; plunger: THREE.Group; flash: THREE.Mesh; kick: number; time: number; lastFire: number; activeLast: boolean; equip: number; reload: number };
 export function createWeaponModel(id: WeaponId): WeaponModel {
   const root = new THREE.Group(), barrel = new THREE.Group(), fan = new THREE.Group(), plunger = new THREE.Group();
   root.name = `weapon-${id}`; root.add(barrel, fan, plunger);
@@ -23,6 +23,7 @@ export function createWeaponModel(id: WeaponId): WeaponModel {
   const mesh = (g: THREE.BufferGeometry, mat: THREE.Material, x: number, y: number, z: number, parent: THREE.Object3D = root) => { const m = new THREE.Mesh(g, mat); m.position.set(x, y, z); parent.add(m); return m; };
   const tube = (r: number, l: number, z: number, mat: THREE.Material, parent: THREE.Object3D = root) => { const m = mesh(cylinder(r, l), mat, 0, 0, z, parent); m.rotation.x = Math.PI / 2; return m; };
   if (id === 'solder') {
+    barrel.position.y = .14; // Keep the heated barrel visible above the housing in first person.
     mesh(box(.32, .3, .42), materials.body, 0, 0, 0);
     const grip = mesh(box(.15, .4, .18), materials.black, 0, -.27, .1); grip.rotation.x = -.22;
     mesh(box(.34, .075, .3), materials.gold, 0, .18, -.03);
@@ -43,7 +44,8 @@ export function createWeaponModel(id: WeaponId): WeaponModel {
     tube(.115, .07, -.61, chamber, barrel);
     mesh(box(.14, .32, .18), materials.black, 0, -.27, .1);
     for (let i = 0; i < 6; i++) for (const x of [-.18, .18]) mesh(box(.025, .12, .025), materials.black, x, 0, -.2 + i * .07);
-    fan.position.z = -.24;
+    fan.position.set(-.21, .06, .04); fan.rotation.y = Math.PI / 2;
+    const rim = mesh(ring(.145), materials.metal, -.22, .06, .04); rim.rotation.y = Math.PI / 2;
     for (let i = 0; i < 5; i++) { const blade = mesh(box(.04, .27, .02), materials.gold, 0, 0, 0, fan); blade.rotation.z = i * Math.PI / 5; }
     tube(.055, .06, -.28, materials.copper);
   } else {
@@ -56,7 +58,7 @@ export function createWeaponModel(id: WeaponId): WeaponModel {
   }
   const flash = mesh(cached('flash', () => new THREE.IcosahedronGeometry(.12, 0)), new THREE.MeshBasicMaterial({ color: id === 'iron' ? '#c4a4ff' : '#fff0a0', transparent: true, opacity: .9 }), 0, 0, id === 'iron' ? -1.34 : -.72);
   flash.visible = false;
-  return { id, root, barrel, coils, chamber, fan, plunger, flash, kick: 0, time: 0, lastFire: 0 };
+  return { id, root, barrel, coils, chamber, fan, plunger, flash, kick: 0, time: 0, lastFire: 0, activeLast: false, equip: 1, reload: 0 };
 }
 export type WeaponAnimation = { dt: number; active: boolean; enabled: boolean; charge: number; heat: number; overheated: boolean; firing: boolean; reloading: boolean; moving: boolean; fireAt: number };
 export function disposeWeaponModel(model: WeaponModel) { model.chamber.dispose(); for (const coil of model.coils) coil.material.dispose(); (model.flash.material as THREE.Material).dispose(); model.root.removeFromParent(); }
@@ -64,16 +66,20 @@ export function animateWeapon(model: WeaponModel, input: WeaponAnimation) {
   const { root, barrel, plunger } = model;
   const dt = Math.max(0, Math.min(input.dt, .25)), charge = input.enabled && !input.reloading ? input.charge : 0;
   root.visible = input.active;
-  if (!input.active || !input.enabled) { model.kick = 0; model.lastFire = input.fireAt; root.position.set(0, 0, 0); root.rotation.set(0, 0, 0); barrel.position.z = 0; plunger.position.z = 0; model.flash.visible = false; model.chamber.emissiveIntensity = .3; for (const coil of model.coils) coil.material.emissiveIntensity = .2; return; }
+  if (!input.active || !input.enabled) model.reload = 0;
+  if (!input.active || !input.enabled) { model.activeLast = false; model.equip = 1; model.kick = 0; model.lastFire = input.fireAt; root.position.set(0, 0, 0); root.rotation.set(0, 0, 0); barrel.position.z = 0; plunger.position.z = 0; model.flash.visible = false; model.chamber.emissiveIntensity = .3; for (const coil of model.coils) coil.material.emissiveIntensity = .2; return; }
+  if (!model.activeLast) { model.equip = 1; model.activeLast = true; }
+  model.equip = THREE.MathUtils.damp(model.equip, 0, 14, dt);
+  model.reload = THREE.MathUtils.damp(model.reload, input.reloading ? 1 : 0, 14, dt);
   model.time += dt;
   if (input.fireAt > model.lastFire) { model.lastFire = input.fireAt; model.kick = 1; }
   model.kick = THREE.MathUtils.damp(model.kick, 0, 12, dt);
   const sway = Math.sin(model.time * (input.moving ? 10 : 1.8)) * (input.moving ? .018 : .004);
   const tension = model.id === 'iron' ? charge * .34 : 0;
   root.position.z = THREE.MathUtils.damp(root.position.z, tension + model.kick * .16, charge > 0 ? 12 : 35, dt);
-  root.position.y = sway - (input.reloading ? .2 : 0);
+  root.position.y = sway - model.reload * .2 - model.equip * .25;
   root.position.x = charge > .85 ? Math.sin(model.time * 95) * .004 * charge : 0;
-  root.rotation.x = model.kick * (model.id === 'pump' ? .2 : .06) + (input.reloading ? -.5 : 0);
+  root.rotation.x = model.kick * (model.id === 'pump' ? .2 : .06) - model.reload * .5 - model.equip * .45;
   root.rotation.z = sway * .3;
   barrel.position.z = model.id === 'iron' ? charge * .16 : 0;
   plunger.position.z = model.id === 'pump' ? -model.kick * .32 : 0;

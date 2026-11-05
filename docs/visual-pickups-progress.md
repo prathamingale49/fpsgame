@@ -20,8 +20,15 @@ to 15s (test fixture override .3s). Stale versions cannot recollect a respawn.
 Kill feeds: Blaster reflowed, Iron precision-soldered, Hot Air heat-soaked,
 Pump desoldered. Messages include attacker, target and weapon, from server kills.
 
-Focused model/pickup/server tests: 14 passing. Remaining: full suite/build,
-real-BMS screenshots/visual checks, publish new PR targeting main; do not merge.
+Focused model/pickup/server tests: 14 passing. Full suite: 101 tests passed.
+Production build passes. Final seven visual/placement tests pass after equip/
+reload easing. Real BMS browser checks pass all four weapons, authoritative
+charge, focus cancellation, E collect, Q swap, and public/sandbox isolation.
+Initial room-transition reads before the first player snapshot caused two
+browser errors; added guards and the repeated browser run has zero errors.
+Screenshots for all four weapons, charge progression and pickups are checked
+in under docs/screenshots/weapon-overhaul; see docs/weapon-visual-gallery.md.
+Remaining: publish new PR targeting main; do not merge.
 Known limitation: floor-grid placement is conservative and does not route
 over component tops. Animation and pickup models use bounded low-poly meshes.
 Sandbox remains all weapons with 1–4; Pickup Practice uses E/Q.

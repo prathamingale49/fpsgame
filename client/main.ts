@@ -29,7 +29,7 @@ el('hud').append(weaponStatus);
 const weaponMeter = document.createElement('progress'); weaponMeter.id = 'weapon-meter'; weaponMeter.max = 1;
 weaponMeter.style.cssText = 'position:absolute;right:28px;bottom:125px;width:200px;height:10px;accent-color:#ffd24a'; weaponMeter.hidden = true; el('hud').append(weaponMeter);
 let specialHeld = false, fullChargeCue = false;
-const currentWeapon = () => WEAPONS[(room?.state.players.get(room.sessionId)?.weapon ?? 'solder') as WeaponId];
+const currentWeapon = () => WEAPONS[(room?.state.players?.get(room.sessionId)?.weapon ?? 'solder') as WeaponId];
 const weaponShot = (): ShotInput => ({ shotId: ++nextShotId, seq, yaw, pitch, viewTime: lastViewTime || undefined });
 function cancelSpecial() { specialHeld = false; fullChargeCue = false; if (room?.state.practice) room.send('weapon:trigger', { action: 'cancel' }); }
 const canvas = el<HTMLCanvasElement>('game');
@@ -412,7 +412,7 @@ async function connect(mode: 'play' | 'create' | 'join' | 'reconnect' | 'practic
     });
     room.onMessage('damage', (msg: { target: string; amount: number }) => {
       if (msg.target === room?.sessionId) flashDamage();
-      const target = room?.state.players.get(msg.target);
+      const target = room?.state.players?.get(msg.target);
       if (room?.state.practice && target?.npc && target.side === local.side) {
         const element = document.createElement('div'); element.textContent = `-${Number(msg.amount.toFixed(1))}`;
         element.style.cssText = 'position:fixed;left:0;top:0;color:#ffd24a;font:bold 22px monospace;pointer-events:none;z-index:4';
@@ -476,7 +476,7 @@ document.addEventListener('keydown', e => {
 });
 // Hold leases and aim updates are independent of rendering FPS.
 setInterval(() => {
-  const p = room?.state.players.get(room.sessionId);
+  const p = room?.state.players?.get(room.sessionId);
   if (!room?.state.practice || !p?.alive || p.reloading || p.transitionCooldown > 0 || document.pointerLockElement !== canvas || !mouseDown) { if (specialHeld) cancelSpecial(); return; }
   if (p.weapon !== 'iron' && p.weapon !== 'air') return;
   room.send('weapon:trigger', { action: p.triggerHeld ? 'aim' : 'start', shot: weaponShot() }); specialHeld = true;
@@ -611,7 +611,7 @@ function frame(now: number) {
     el('ammo').textContent = config.id === 'air' ? `${Math.round(p.heat * 100)}%` : String(p.ammo);
     el('reserve').textContent = config.id === 'air' ? 'HEAT' : String(p.reserve);
     el('ammo-bar').style.width = `${100 * (config.id === 'air' ? p.heat : p.ammo / config.magazine)}%`;
-    weaponStatus.textContent = `1 BLASTER · 2 IRON · 3 HOT AIR · 4 PUMP\n${p.reloading ? 'RELOADING' : p.overheated && p.weapon === 'air' ? 'OVERHEATED — COOLING' : p.weapon === 'iron' ? `CHARGE ${Math.round(charge * 100)}% ${charge >= 1 ? 'READY' : '(hold / release)'}` : p.weapon === 'air' ? `HEAT ${Math.round(p.heat * 100)}%` : ''}`;
+    weaponStatus.textContent = `SANDBOX · 1 BLASTER · 2 IRON · 3 HOT AIR · 4 PUMP\n${p.reloading ? 'RELOADING' : p.overheated && p.weapon === 'air' ? 'OVERHEATED — COOLING' : p.weapon === 'iron' ? `CHARGE ${Math.round(charge * 100)}% ${charge >= 1 ? 'READY' : '(hold / release)'}` : p.weapon === 'air' ? `HEAT ${Math.round(p.heat * 100)}%` : ''}`;
     weaponStatus.style.whiteSpace = 'pre-line';
     const viewScale = .75 * playerTuning.height / 1.8;
     gunView.scale.setScalar(viewScale);
