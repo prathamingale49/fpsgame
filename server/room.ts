@@ -1,3 +1,4 @@
+import { KillChain } from './kill-chain.js';
 import { Room, type Client } from 'colyseus';
 import { MatchState, PlayerState, PickupState, WeaponPickupState } from './state.js';
 import { WEAPONS, validWeaponId, ironDamage, pumpRays, weaponHits, weaponKillMessage, HEAT, type WeaponId } from '../shared/weapons.js';
@@ -29,6 +30,7 @@ export class GameRoom extends Room {
   private bots = new Map<string, { mode: number; next: number; yaw: number; moving: boolean; sprint: boolean }>();
   maxClients = 8;
   state = new MatchState();
+  private killChain = new KillChain();
   private runtime = new Map<string, Runtime>();
   private hitHistory = new Map<string, PositionSample[]>();
   private elapsed = 0;
@@ -147,6 +149,7 @@ export class GameRoom extends Room {
 
   onDrop(client: Client) {
     this.cancelWeapon(client.sessionId);
+    this.killChain.reset(client.sessionId);
     if (TRACE_MOVEMENT) console.log('MOVE_TRACE', JSON.stringify({ event: 'drop', player: client.sessionId }));
     const p = this.state.players.get(client.sessionId);
     if (p) p.connected = false;
@@ -161,6 +164,7 @@ export class GameRoom extends Room {
   }
 
   onLeave(client: Client) {
+    this.killChain.reset(client.sessionId);
     const p = this.state.players.get(client.sessionId);
     if (p) this.broadcast('feed', { text: `${p.name} disconnected` });
     this.state.players.delete(client.sessionId);
@@ -171,6 +175,7 @@ export class GameRoom extends Room {
   }
 
   private startMatch() {
+    this.killChain.clear();
     this.hitHistory.clear();
     this.elapsed = 0; this.state.seconds = this.matchSeconds; this.state.winner = ''; this.state.phase = 'playing';
     this.state.players.forEach((p) => {
@@ -344,11 +349,15 @@ export class GameRoom extends Room {
       this.cancelWeapon(targetId);
       this.hitHistory.delete(targetId);
       const targetRuntime = this.runtime.get(targetId); if (targetRuntime) targetRuntime.respawnAt = now + (target.npc ? 3 : RESPAWN_SECONDS);
-      this.broadcast('feed', { text: weaponKillMessage(p.weapon as WeaponId, p.name, target.name) });
+      this.killChain.reset(targetId);
+      const chain = this.killChain.record(id, now * 1000);
+      this.clients.find(client => client.sessionId === id)?.send('elimination', { target: targetId, name: target.name, chain });
+      this.broadcast('feed', { text: weaponKillMessage(p.weapon as WeaponId, p.name, target.name), chain });
     }
   }
 
   private respawn(id: string) {
+    this.killChain.reset(id);
     const p = this.state.players.get(id); if (!p) return;
     this.hitHistory.delete(id);
     const spawn = p.npc ? this.botSpawn(Number(id.slice(4))) : activeMap.spawns[this.spawnIndex++ % activeMap.spawns.length];
