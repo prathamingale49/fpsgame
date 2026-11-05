@@ -55,6 +55,8 @@ export function weaponPickupLocations(map: MapData, seed = Math.floor(Math.rando
     const side: BoardSide = i % 2 === 1 && available.back.length ? 'back' : 'front';
     const candidates = available[side];
     if (!candidates.length) continue;
+    // Start each surface at a genuinely random safe location, not the BFS origin.
+    if (!chosen.some(p => p.side === side)) { chosen.push(candidates[Math.floor(random() * candidates.length)]); continue; }
     const same = chosen.filter((p, j) => p.side === side && j % 3 === i % 3);
     const ranked = candidates.map(p => {
       const spacing = (points: Point[]) => points.length
