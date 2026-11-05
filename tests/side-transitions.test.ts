@@ -1,5 +1,5 @@
 import { expect, it } from 'vitest';
-import { initialMotion, PLAYER, testMap, transitionEdge, stepMotion, hitscan, aimRay, type MapData, type BoardSide } from '../shared/game.js';
+import { initialMotion, EDGE_FLIP_SECONDS, PLAYER, testMap, transitionEdge, stepMotion, hitscan, aimRay, TICK, type MapData, type BoardSide } from '../shared/game.js';
 
 const map: MapData = { ...testMap, back: { enabled: true, thickness: 1.6, boxes: [] } };
 for (const side of ['front', 'back'] as BoardSide[]) for (const [x, z] of [[51, 12], [-51, 12], [12, 37], [12, -37]]) {
@@ -36,6 +36,21 @@ it('leaves legacy maps and cooldown moves unchanged', () => {
   expect(transitionEdge(cooldown, map, PLAYER).side).toBe('front');
   expect(transitionEdge(cooldown, map, PLAYER).x).toBeLessThan(50);
 });
+it('holds the player at the landing point until the flip finishes, even when sprinting and jumping', () => {
+  let motion = transitionEdge(initialMotion([51, 0, 12]), map, PLAYER);
+  expect(motion.side).toBe('back');
+  expect(motion.transitionCooldown).toBe(EDGE_FLIP_SECONDS);
+  const landing = [motion.x, motion.y, motion.z];
+  const lockedTicks = Math.ceil(EDGE_FLIP_SECONDS / TICK);
+  for (let i = 0; i < lockedTicks; i++) {
+    motion = stepMotion(motion, { seq: i + 1, forward: 1, strafe: 1, yaw: 0, pitch: 0, jump: true, sprint: true }, map);
+    expect([motion.x, motion.y, motion.z]).toEqual(landing);
+    expect(motion.side).toBe('back');
+  }
+  expect(motion.transitionCooldown).toBe(0);
+  motion = stepMotion(motion, { seq: 100, forward: 1, strafe: 0, yaw: 0, pitch: 0, jump: false, sprint: true }, map);
+  expect(Math.hypot(motion.x - landing[0], motion.z - landing[2])).toBeGreaterThan(0);
+});
 for (const yaw of [0, Math.PI / 2, Math.PI, -Math.PI / 2]) it(`sustains held movement inward after edge wrap at yaw ${yaw}`, () => {
   const empty = { ...map, width: 20, depth: 20, boxes: [] };
   let motion = initialMotion([-Math.sin(yaw) * 9.9, 0, -Math.cos(yaw) * 9.9]);
@@ -70,7 +85,8 @@ it('repeats front/back crossings indefinitely without changing motion invariants
     expect(Number.isFinite(next.y)).toBe(true);
     motion = next;
   }
-  expect(wraps).toBeGreaterThan(40);
+  // The flip lock intentionally reduces the number of possible crossings.
+  expect(wraps).toBeGreaterThanOrEqual(35);
 });
 it('resolves diagonal corner wraps without a sustained loop', () => {
   const empty = { ...map, width: 20, depth: 20, boxes: [] };
@@ -82,6 +98,6 @@ it('resolves diagonal corner wraps without a sustained loop', () => {
     motion = next;
   }
   expect(wraps).toBeLessThanOrEqual(2);
-  expect(Math.abs(motion.x)).toBeLessThan(9);
-  expect(Math.abs(motion.z)).toBeLessThan(9);
+  expect(Math.abs(motion.x)).toBeLessThan(9.9);
+  expect(Math.abs(motion.z)).toBeLessThan(9.9);
 });

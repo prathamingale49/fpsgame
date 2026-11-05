@@ -229,7 +229,7 @@ export class GameRoom extends Room {
     // send their instantaneous aim and the timestamp of what they actually saw.
     if (payload !== undefined && payload !== null && !validShotInput(payload)) return;
     const shot: ShotInput | undefined = payload === undefined || payload === null ? undefined : payload as ShotInput;
-    if (!p || p.npc || !r || !p.alive || !p.connected || this.state.phase !== 'playing' || p.reloading || now - r.lastShot < WEAPON.fireInterval) return;
+    if (!p || p.npc || !r || !p.alive || !p.connected || this.state.phase !== 'playing' || p.reloading || p.transitionCooldown > 0 || now - r.lastShot < WEAPON.fireInterval) return;
     if (shot && (shot.shotId <= r.lastShotId || shot.seq > r.lastReceived + 1 || shot.seq < r.lastSeq - 120)) return;
     if (p.ammo <= 0) { this.reload(id); return; }
     if (shot) r.lastShotId = shot.shotId;

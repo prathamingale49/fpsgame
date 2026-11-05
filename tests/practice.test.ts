@@ -58,5 +58,19 @@ it('runs isolated solo targets with movement control, shared damage and three-se
     expect(publicRoom.state.practice).toBe(false); expect(publicRoom.state.phase).toBe('waiting');
     await expect(client.joinById(room.roomId, options)).rejects.toThrow();
     expect(room.state.phase).toBe('playing'); expect(room.state.winner).toBe('');
+    // PR #5's authoritative flip lock also applies inside Solo Practice.
+    const input = (seq: number, forward = 0) => room.send('input', { seq, forward, strafe: 0, yaw: 0, pitch: 0, jump: true, sprint: true });
+    for (let seq = 2; seq <= 64; seq++) input(seq, 1);
+    await wait(() => room.state.players.get(room.sessionId)?.ack === 64);
+    const human = room.state.players.get(room.sessionId)!;
+    expect(human.side).toBe('back'); expect(human.transitionCooldown).toBeGreaterThan(0);
+    const position = [human.x, human.z], ammo = human.ammo;
+    input(65, 1); await wait(() => human.ack === 65);
+    expect([human.x, human.z]).toEqual(position);
+    room.send('shoot'); await delay(150); expect(human.ammo).toBe(ammo);
+    for (let seq = 66; seq <= 125; seq++) input(seq);
+    await wait(() => human.ack === 125 && human.transitionCooldown === 0);
+    room.send('shoot'); await wait(() => human.ammo === ammo - 1);
+    expect(human.hp).toBe(100); expect(room.state.players.size).toBe(6);
   } finally { for (const room of rooms) await room.leave(); server.kill(); }
 }, 18000);
