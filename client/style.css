@@ -81,8 +81,3 @@ input::placeholder{color:#9b9d98}
 #scale-close:hover,#scale-resume:hover{border-color:var(--yjsp-gold)}
 @media(max-width:800px){#topbar{padding:0 14px}.topbar-brand{gap:11px}.topbar-yjsp{padding-left:11px}.topbar-yjsp img{width:43px;height:33px}.mobile-yjsp{display:flex;align-items:center;gap:14px;margin-top:32px;padding-top:14px;border-top:1px solid #e0a50055}.mobile-yjsp img{width:95px;height:65px;object-fit:contain}}
 @media(prefers-reduced-motion:reduce){.meter i{transition:none}}
-
-/* A brief, gameplay-locked board flip when crossing onto the opposite surface. */
-#board-flip{position:absolute;left:50%;bottom:15%;transform:translateX(-50%);z-index:4;width:min(290px,75vw);padding:13px 18px;text-align:center;background:#323332d9;border:1px solid #e0a50091;box-shadow:0 8px 35px #0008;color:#fff;font:600 11px 'DM Mono',monospace;letter-spacing:.13em;text-shadow:0 1px 8px #000}
-.board-flip-track{height:3px;margin-top:12px;background:#ffffff3c;overflow:hidden}
-#board-flip-progress{display:block;width:0;height:100%;background:#e0a500}
