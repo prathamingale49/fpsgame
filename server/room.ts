@@ -1,11 +1,11 @@
 import { Room, type Client } from 'colyseus';
 import { MatchState, PlayerState, PickupState } from './state.js';
-import { aimRay, movementYaw, collisionCacheStats, hitscan, initialMotion, stepMotion, testMap, TICK, MOVEMENT_PROTOCOL, MATCH_SECONDS, RESPAWN_SECONDS, PLAYER, WEAPON, tuningForHeight, validDevHeight, validInput, type Input, type MapData, type Motion, type PlayerTuning, type BoardSide } from '../shared/game.js';
+import { aimRay, movementYaw, collisionCacheStats, hitscan, initialMotion, samplePosition, stepMotion, testMap, TICK, MOVEMENT_PROTOCOL, MATCH_SECONDS, RESPAWN_SECONDS, PLAYER, WEAPON, COMBAT, tuningForHeight, validDevHeight, validInput, validShotInput, type Input, type ShotInput, type PositionSample, type MapData, type Motion, type PlayerTuning, type BoardSide } from '../shared/game.js';
 const PLAYER_PICKUP_DISTANCE = .9;
 const TRACE_MOVEMENT = process.env.PCB_MOVEMENT_TRACE === '1';
 export const DEV_SCALE_ENABLED = process.env.PCB_DEV_SCALE === '1' && process.env.NODE_ENV !== 'production';
 
-type Runtime = { queue: Map<number, Input>; lastReceived: number; lastSeq: number; credit: number; lastShot: number; reloadAt: number; respawnAt: number };
+type Runtime = { queue: Map<number, Input>; lastReceived: number; lastSeq: number; credit: number; lastShot: number; lastShotId: number; reloadAt: number; respawnAt: number };
 export let activeMap: MapData = testMap;
 export function setActiveMap(map: MapData) { activeMap = map; }
 export const serverPerf = { ticks: 0, tickMsTotal: 0, tickMsMax: 0, queueMax: 0, queueTotal: 0, processed: 0, cache: () => collisionCacheStats(activeMap) };
@@ -17,6 +17,7 @@ export class GameRoom extends Room {
   maxClients = 8;
   state = new MatchState();
   private runtime = new Map<string, Runtime>();
+  private hitHistory = new Map<string, PositionSample[]>();
   private elapsed = 0;
   private endAt = 0;
   private spawnIndex = 0;
@@ -51,7 +52,7 @@ export class GameRoom extends Room {
         if (p && newest) { p.yaw = payload.yaw; p.pitch = payload.pitch; }
       } else if (TRACE_MOVEMENT) console.log('MOVE_TRACE', JSON.stringify({ event: 'reject', player: client.sessionId, seq: payload.seq, lastReceived: r?.lastReceived, ack: r?.lastSeq }));
     });
-    this.onMessage('shoot', (client) => this.shoot(client));
+    this.onMessage('shoot', (client, payload: unknown) => this.shoot(client, payload));
     this.onMessage('reload', (client) => this.reload(client.sessionId));
     this.onMessage('dev:scale', (client, payload: unknown) => {
       if (!DEV_SCALE_ENABLED || !this.runtime.has(client.sessionId)) return;
@@ -60,6 +61,7 @@ export class GameRoom extends Room {
       if (height === null || height === this.playerTuning.height) return;
       this.playerTuning = tuningForHeight(height);
       this.state.playerHeight = height;
+      this.hitHistory.clear();
       // Input predictions made with the previous tuning cannot be replayed under the new tuning.
       this.runtime.forEach((r, id) => {
         r.queue.clear(); r.credit = 0; r.lastSeq = r.lastReceived;
@@ -75,7 +77,7 @@ export class GameRoom extends Room {
     const spawn = activeMap.spawns[this.spawnIndex++ % activeMap.spawns.length];
     const p = new PlayerState({ name: safeName(options?.name), x: spawn[0], y: spawn[1], z: spawn[2] });
     this.state.players.set(client.sessionId, p);
-    this.runtime.set(client.sessionId, { queue: new Map(), lastReceived: 0, lastSeq: 0, credit: 0, lastShot: -Infinity, reloadAt: 0, respawnAt: 0 });
+    this.runtime.set(client.sessionId, { queue: new Map(), lastReceived: 0, lastSeq: 0, credit: 0, lastShot: -Infinity, lastShotId: -1, reloadAt: 0, respawnAt: 0 });
     if (this.state.players.size >= 2 && this.state.phase === 'waiting') this.startMatch();
     this.broadcast('feed', { text: `${p.name} connected` });
   }
@@ -99,10 +101,12 @@ export class GameRoom extends Room {
     if (p) this.broadcast('feed', { text: `${p.name} disconnected` });
     this.state.players.delete(client.sessionId);
     this.runtime.delete(client.sessionId);
+    this.hitHistory.delete(client.sessionId);
     if (this.state.players.size < 2 && this.state.phase === 'playing') this.state.phase = 'waiting';
   }
 
   private startMatch() {
+    this.hitHistory.clear();
     this.elapsed = 0; this.state.seconds = this.matchSeconds; this.state.winner = ''; this.state.phase = 'playing';
     this.state.players.forEach((p) => {
       if (Math.abs(p.x) >= activeMap.width / 2 || Math.abs(p.z) >= activeMap.depth / 2 || p.y < activeMap.ground - 1) {
@@ -113,7 +117,7 @@ export class GameRoom extends Room {
       p.jumpHeld = false; p.mantleTarget = 0;
       p.kills = 0; p.deaths = 0; p.hp = 100; p.alive = true; p.ammo = WEAPON.magazine; p.reserve = WEAPON.reserve; p.reloading = false;
     });
-    this.runtime.forEach((r, id) => { r.queue.clear(); r.credit = 0; r.lastSeq = r.lastReceived; r.lastShot = -Infinity; r.reloadAt = 0; const p = this.state.players.get(id); if (p) p.ack = r.lastSeq; });
+    this.runtime.forEach((r, id) => { r.queue.clear(); r.credit = 0; r.lastSeq = r.lastReceived; r.lastShot = -Infinity; r.lastShotId = -1; r.reloadAt = 0; const p = this.state.players.get(id); if (p) p.ack = r.lastSeq; });
     this.state.pickups.forEach((pickup) => { pickup.active = true; }); this.pickupRespawns.clear();
     this.broadcast('feed', { text: 'Match started' });
   }
@@ -170,6 +174,8 @@ export class GameRoom extends Room {
         this.broadcast('pickup', { player: id, amount: WEAPON.pickupRounds });
       });
     });
+    this.state.serverTime = Date.now();
+    this.recordPositions(this.state.serverTime);
     const workMs = performance.now() - workStart;
     serverPerf.ticks++; serverPerf.tickMsTotal += workMs; serverPerf.tickMsMax = Math.max(serverPerf.tickMsMax, workMs);
   }
@@ -185,21 +191,43 @@ export class GameRoom extends Room {
     if (!p || !r || !p.alive) return;
     p.hp = 0; p.alive = false; p.deaths++; p.reloading = false; p.mantleTarget = 0;
     r.respawnAt = now + RESPAWN_SECONDS;
+    this.hitHistory.delete(id);
     r.queue.clear(); r.credit = 0; r.lastSeq = r.lastReceived; p.ack = r.lastSeq;
     this.broadcast('feed', { text: `${p.name} fell off the PCB` });
   }
 
-  private shoot(client: Client) {
+  private recordPositions(time: number) {
+    this.state.players.forEach((p, id) => {
+      if (!p.alive || !p.connected) { this.hitHistory.delete(id); return; }
+      const samples = this.hitHistory.get(id) ?? [];
+      samples.push({ time, x: p.x, y: p.y, z: p.z, side: p.side as BoardSide });
+      while (samples.length && samples[0].time < time - COMBAT.historyMs) samples.shift();
+      this.hitHistory.set(id, samples);
+    });
+  }
+
+  private shoot(client: Client, payload: unknown) {
     const id = client.sessionId, p = this.state.players.get(id), r = this.runtime.get(id);
-    const now = Date.now() / 1000;
+    const nowMs = Date.now(), now = nowMs / 1000;
+    // Legacy empty shot messages remain valid for test clients; browser clients
+    // send their instantaneous aim and the timestamp of what they actually saw.
+    if (payload !== undefined && payload !== null && !validShotInput(payload)) return;
+    const shot: ShotInput | undefined = payload === undefined || payload === null ? undefined : payload as ShotInput;
     if (!p || !r || !p.alive || !p.connected || this.state.phase !== 'playing' || p.reloading || now - r.lastShot < WEAPON.fireInterval) return;
+    if (shot && (shot.shotId <= r.lastShotId || shot.seq > r.lastReceived + 1 || shot.seq < r.lastSeq - 120)) return;
     if (p.ammo <= 0) { this.reload(id); return; }
+    if (shot) r.lastShotId = shot.shotId;
     r.lastShot = now; p.ammo--;
-    const ray = aimRay(p.x, p.y, p.z, movementYaw(p.yaw, p as unknown as Motion), p.pitch, this.playerTuning);
-    const opponents = [...this.state.players.entries()].filter(([otherId, other]) => otherId !== id && other.alive && other.connected && other.side === p.side).map(([otherId, other]) => [otherId, other as unknown as Motion] as [string, Motion]);
+    const ray = aimRay(p.x, p.y, p.z, movementYaw(shot?.yaw ?? p.yaw, p as unknown as Motion), shot?.pitch ?? p.pitch, this.playerTuning);
+    const viewTime = shot?.viewTime === undefined ? nowMs : Math.min(nowMs, Math.max(nowMs - COMBAT.maxRewindMs, shot.viewTime));
+    const opponents = [...this.state.players.entries()].filter(([otherId, other]) => otherId !== id && other.alive && other.connected && other.side === p.side).map(([otherId, other]) => {
+      const historical = samplePosition(this.hitHistory.get(otherId) ?? [], viewTime);
+      const position = historical?.side === other.side ? historical : other;
+      return [otherId, { x: position.x, y: position.y, z: position.z, side: other.side } as Motion] as [string, Motion];
+    });
     const result = hitscan(ray, activeMap, opponents, id, this.playerTuning, p.side as BoardSide);
     const end = ray.origin.map((v, i) => v + ray.direction[i] * result.distance);
-    this.broadcast('shot', { shooter: id, side: p.side, from: ray.origin, to: end, hit: result.target });
+    this.broadcast('shot', { shooter: id, shotId: shot?.shotId, side: p.side, from: ray.origin, to: end, hit: result.target });
     if (p.ammo === 0 && p.reserve > 0) this.reload(id);
     if (!result.target) return;
     const target = this.state.players.get(result.target); if (!target) return;
@@ -207,6 +235,7 @@ export class GameRoom extends Room {
     this.broadcast('damage', { target: result.target, shooter: id, amount: WEAPON.damage });
     if (target.hp === 0) {
       target.alive = false; target.deaths++; p.kills++;
+      this.hitHistory.delete(result.target);
       const targetRuntime = this.runtime.get(result.target); if (targetRuntime) targetRuntime.respawnAt = now + RESPAWN_SECONDS;
       this.broadcast('feed', { text: `${p.name} eliminated ${target.name}` });
     }
@@ -214,6 +243,7 @@ export class GameRoom extends Room {
 
   private respawn(id: string) {
     const p = this.state.players.get(id); if (!p) return;
+    this.hitHistory.delete(id);
     const spawn = activeMap.spawns[this.spawnIndex++ % activeMap.spawns.length];
     const m = initialMotion(spawn);
     p.x = m.x; p.y = m.y; p.z = m.z; p.vy = 0; p.grounded = true; p.jumpHeld = false; p.mantleTarget = 0;
