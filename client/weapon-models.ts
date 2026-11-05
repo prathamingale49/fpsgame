@@ -62,7 +62,7 @@ export type WeaponAnimation = { dt: number; active: boolean; enabled: boolean; c
 export function disposeWeaponModel(model: WeaponModel) { model.chamber.dispose(); for (const coil of model.coils) coil.material.dispose(); (model.flash.material as THREE.Material).dispose(); model.root.removeFromParent(); }
 export function animateWeapon(model: WeaponModel, input: WeaponAnimation) {
   const { root, barrel, plunger } = model;
-  const dt = Math.min(input.dt, .1), charge = input.enabled && !input.reloading ? input.charge : 0;
+  const dt = Math.max(0, Math.min(input.dt, .25)), charge = input.enabled && !input.reloading ? input.charge : 0;
   root.visible = input.active;
   if (!input.active || !input.enabled) { model.kick = 0; model.lastFire = input.fireAt; root.position.set(0, 0, 0); root.rotation.set(0, 0, 0); barrel.position.z = 0; plunger.position.z = 0; model.flash.visible = false; model.chamber.emissiveIntensity = .3; for (const coil of model.coils) coil.material.emissiveIntensity = .2; return; }
   model.time += dt;

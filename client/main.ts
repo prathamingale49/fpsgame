@@ -19,6 +19,7 @@ const pickupButton = practiceButton.cloneNode(true) as HTMLButtonElement; pickup
 const pickupPrompt = document.createElement('div'); pickupPrompt.id = 'pickup-prompt'; pickupPrompt.style.cssText = 'position:absolute;bottom:190px;width:100%;text-align:center;font:13px monospace;color:#ffcf4a;pointer-events:none'; el('hud').append(pickupPrompt);
 const weaponPickupModels = new Map<string, THREE.Group>();
 let nearbyWeapon: { id: string; version: number } | null = null, visualFireAt = 0;
+let visualFireWeapon: WeaponId = 'solder';
 let showNpcHitboxes = false;
 const npcHitboxes = new Map<string, THREE.Box3Helper>();
 const damageNumbers: { element: HTMLElement; position: THREE.Vector3; born: number }[] = [];
@@ -397,7 +398,7 @@ async function connect(mode: 'play' | 'create' | 'join' | 'reconnect' | 'practic
     room.onStateChange(syncState);
     room.onMessage('feed', (msg: { text: string }) => showFeed(msg.text));
     room.onMessage('shot', (msg: { shooter: string; shotId?: number; weapon?: WeaponId; side: BoardSide; from: number[]; to: number[]; hit?: string }) => {
-      if (msg.shooter === room?.sessionId) visualFireAt = performance.now();
+      if (msg.shooter === room?.sessionId) { visualFireAt = performance.now(); visualFireWeapon = msg.weapon ?? 'solder'; }
       if (msg.side === (local.side ?? 'front')) {
         const predicted = msg.shooter === room?.sessionId && msg.shotId !== undefined ? predictedTracers.get(msg.shotId) : undefined;
         if (predicted) {
@@ -627,7 +628,7 @@ function frame(now: number) {
   if (!room?.state.practice) { airCone.visible = false; weaponMeter.hidden = true; weaponStatus.textContent = ''; gunView.scale.setScalar(.75 * playerTuning.height / 1.8); el('bottom-hud').querySelector('.ammo small')!.textContent = 'SOLDER BLASTER · SOLDER'; }
   const me = room?.state.players?.get(room.sessionId), equipped = currentWeapon().id;
   const animationCharge = me?.chargeStarted ? Math.min(1, Math.max(0, ((Date.now() - (Number.isFinite(serverClockOffsetMs) ? serverClockOffsetMs : 0)) / 1000 - me.chargeStarted) / CHARGE.full)) : 0;
-  for (const [id, model] of weaponModels) animateWeapon(model, { dt, active: id === equipped && !!me?.alive, enabled: !!me?.alive && document.pointerLockElement === canvas && !boardFlip, charge: animationCharge, heat: me?.heat ?? 0, overheated: me?.overheated ?? false, firing: me?.triggerHeld ?? false, reloading: me?.reloading ?? false, moving: keys.has('KeyW') || keys.has('KeyS') || keys.has('KeyA') || keys.has('KeyD'), fireAt: visualFireAt });
+  for (const [id, model] of weaponModels) animateWeapon(model, { dt, active: id === equipped && !!me?.alive, enabled: !!me?.alive && document.pointerLockElement === canvas && !boardFlip, charge: animationCharge, heat: me?.heat ?? 0, overheated: me?.overheated ?? false, firing: me?.triggerHeld ?? false, reloading: me?.reloading ?? false, moving: keys.has('KeyW') || keys.has('KeyS') || keys.has('KeyA') || keys.has('KeyD'), fireAt: id === visualFireWeapon ? visualFireAt : 0 });
   nearbyWeapon = null; pickupPrompt.textContent = '';
   const presentWeaponPickups = new Set<string>(); let nearest: number = WEAPON_PICKUPS.radius;
   room?.state.weaponPickups?.forEach((pickup, id) => {

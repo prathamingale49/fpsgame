@@ -15,8 +15,13 @@ try {
   await page.locator('#game').click();
   await page.waitForFunction(() => document.pointerLockElement?.id === 'game');
   await page.keyboard.press('F6');
+  fs.mkdirSync('artifacts', { recursive: true });
+  await page.screenshot({ path: 'artifacts/weapon-model-solder.png' });
   await page.keyboard.press('Digit2'); await page.locator('.ammo small').getByText('PRECISION IRON').waitFor();
+  await page.screenshot({ path: 'artifacts/weapon-iron-idle.png' });
   await page.mouse.down();
+  await page.waitForFunction(() => (document.querySelector('#weapon-meter') as HTMLProgressElement).value > .3);
+  await page.screenshot({ path: 'artifacts/weapon-iron-partial.png' });
   await page.waitForFunction(() => (document.querySelector('#weapon-meter') as HTMLProgressElement).value >= 1, null, { timeout: 5000 });
   fs.mkdirSync('artifacts', { recursive: true }); await page.screenshot({ path: 'artifacts/weapon-iron-charged.png' });
   await page.mouse.up(); await page.waitForFunction(() => document.querySelector('#ammo')?.textContent === '4');
@@ -44,6 +49,17 @@ try {
   await page.waitForFunction(() => document.querySelector('#player-count')?.textContent?.includes('1 / 8 PLAYERS'));
   await page.keyboard.press('Digit2'); await delay(150);
   if (!(await page.locator('.ammo small').textContent())?.includes('SOLDER BLASTER')) throw new Error('Public weapon restriction failed');
+  await page.evaluate(() => document.exitPointerLock()); await page.locator('#leave').click();
+  await page.locator('#menu:not(.hidden)').waitFor(); await page.locator('#pickup-practice').click();
+  await page.waitForFunction(() => document.querySelector('#weapon-status')?.textContent?.includes('PICKUP PRACTICE'));
+  await page.locator('#game[data-model-loaded="true"]').waitFor({ timeout: 60000 });
+  await page.locator('#pickup-prompt').getByText('PRESS E TO PICK UP', { exact: false }).waitFor();
+  await page.screenshot({ path: 'artifacts/weapon-pickup-practice.png' });
+  await page.keyboard.press('Digit4'); await delay(100);
+  if (!(await page.locator('.ammo small').textContent())?.includes('SOLDER BLASTER')) throw new Error('Pickup mode allowed unowned selection');
+  await page.keyboard.press('KeyE'); await page.locator('.ammo small').getByText('PRECISION IRON').waitFor();
+  await page.keyboard.press('KeyQ'); await page.locator('.ammo small').getByText('SOLDER BLASTER').waitFor();
+  await page.keyboard.press('KeyQ'); await page.locator('.ammo small').getByText('PRECISION IRON').waitFor();
   if (errors.length) throw new Error(errors.join('\n'));
-  console.log(JSON.stringify({ ok: true, map: 'bms', ironFullChargeAndFocusCancel: true, pumpAmmo: true, airOverheatAndCooling: true, solderAuto: true, publicSolderOnly: true }));
+  console.log(JSON.stringify({ ok: true, map: 'bms', ironFullChargeAndFocusCancel: true, pumpAmmo: true, airOverheatAndCooling: true, solderAuto: true, publicSolderOnly: true, pickupPracticeCollectAndSwap: true }));
 } finally { await browser.close(); server.kill(); }

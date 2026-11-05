@@ -3,6 +3,7 @@ import { createWeaponModel, animateWeapon, type WeaponAnimation } from '../clien
 import { weaponPickupLocations, canCollectWeapon } from '../shared/weapon-pickups.js';
 import { WEAPON_IDS, weaponKillMessage } from '../shared/weapons.js';
 import { testMap } from '../shared/game.js';
+import fs from 'node:fs';
 const input: WeaponAnimation = { dt: 1 / 60, active: true, enabled: true, charge: 0, heat: 0, firing: false, overheated: false, reloading: false, moving: false, fireAt: 0 };
 it('builds four distinct reusable models with recognizably different parts', () => {
   const models = WEAPON_IDS.map(createWeaponModel);
@@ -46,4 +47,9 @@ it('gives each gun its own electronics-themed kill message', () => {
   const messages = WEAPON_IDS.map(id => weaponKillMessage(id, 'Alice', 'Target'));
   expect(new Set(messages).size).toBe(4); expect(messages.every(m => m.includes('Alice') && m.includes('Target'))).toBe(true);
   expect(messages[0]).toContain('reflowed'); expect(messages[3]).toContain('desoldered');
+});
+it('places all three pickups safely on the actual BMS map', () => {
+  const map = JSON.parse(fs.readFileSync('assets/public/maps/bms.json', 'utf8'));
+  const points = weaponPickupLocations(map); expect(points).toHaveLength(3);
+  for (const p of points) expect(canCollectWeapon({ ...p, alive: true }, { ...p, weapon: 'iron', active: true, version: 0 }, map)).toBe(true);
 });
