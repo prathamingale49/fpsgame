@@ -1,5 +1,5 @@
 export const TICK = 1 / 60;
-export const MOVEMENT_PROTOCOL = 6;
+export const MOVEMENT_PROTOCOL = 7;
 export const EDGE_FLIP_SECONDS = .9;
 export const FLIP_COOLDOWN_SECONDS = 5;
 export const MATCH_SECONDS = 300;
