@@ -1,3 +1,4 @@
+import { KillChain } from './kill-chain.js';
 import { Room, type Client } from 'colyseus';
 import { MatchState, PlayerState, PickupState } from './state.js';
 import { aimRay, movementYaw, collisionCacheStats, hitscan, initialMotion, samplePosition, stepMotion, testMap, TICK, MOVEMENT_PROTOCOL, MATCH_SECONDS, RESPAWN_SECONDS, PLAYER, WEAPON, COMBAT, tuningForHeight, validDevHeight, validInput, validShotInput, type Input, type ShotInput, type PositionSample, type MapData, type Motion, type PlayerTuning, type BoardSide } from '../shared/game.js';
@@ -18,6 +19,7 @@ export class GameRoom extends Room {
   private bots = new Map<string, { mode: number; next: number; yaw: number; moving: boolean; sprint: boolean }>();
   maxClients = 8;
   state = new MatchState();
+  private killChain = new KillChain();
   private runtime = new Map<string, Runtime>();
   private hitHistory = new Map<string, PositionSample[]>();
   private elapsed = 0;
@@ -89,6 +91,7 @@ export class GameRoom extends Room {
   }
 
   onDrop(client: Client) {
+    this.killChain.reset(client.sessionId);
     if (TRACE_MOVEMENT) console.log('MOVE_TRACE', JSON.stringify({ event: 'drop', player: client.sessionId }));
     const p = this.state.players.get(client.sessionId);
     if (p) p.connected = false;
@@ -103,6 +106,7 @@ export class GameRoom extends Room {
   }
 
   onLeave(client: Client) {
+    this.killChain.reset(client.sessionId);
     const p = this.state.players.get(client.sessionId);
     if (p) this.broadcast('feed', { text: `${p.name} disconnected` });
     this.state.players.delete(client.sessionId);
@@ -112,6 +116,7 @@ export class GameRoom extends Room {
   }
 
   private startMatch() {
+    this.killChain.clear();
     this.hitHistory.clear();
     this.elapsed = 0; this.state.seconds = this.matchSeconds; this.state.winner = ''; this.state.phase = 'playing';
     this.state.players.forEach((p) => {
@@ -251,13 +256,17 @@ export class GameRoom extends Room {
     this.broadcast('damage', { target: result.target, shooter: id, amount: WEAPON.damage });
     if (target.hp === 0) {
       target.alive = false; target.deaths++; p.kills++;
+      this.killChain.reset(result.target);
+      const chain = this.killChain.record(id, nowMs);
+      client.send('elimination', { target: result.target, name: target.name, chain });
       this.hitHistory.delete(result.target);
       const targetRuntime = this.runtime.get(result.target); if (targetRuntime) targetRuntime.respawnAt = now + (target.npc ? 3 : RESPAWN_SECONDS);
-      this.broadcast('feed', { text: `${p.name} eliminated ${target.name}` });
+      this.broadcast('feed', { text: `${p.name} eliminated ${target.name}`, chain });
     }
   }
 
   private respawn(id: string) {
+    this.killChain.reset(id);
     const p = this.state.players.get(id); if (!p) return;
     this.hitHistory.delete(id);
     const spawn = p.npc ? this.botSpawn(Number(id.slice(4))) : activeMap.spawns[this.spawnIndex++ % activeMap.spawns.length];
