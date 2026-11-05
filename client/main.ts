@@ -1,7 +1,7 @@
 import * as THREE from 'three';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 import { Client, type Room } from '@colyseus/sdk';
-import { aimRay, collisionCacheStats, movementYaw, samplePosition, hitscan, COMBAT, DEV_SCALE, EDGE_FLIP_SECONDS, JUMP_HEIGHT_RATIO, PLAYER, initialMotion, MOVEMENT_PROTOCOL, stepMotion, testMap, TICK, WEAPON, tuningForHeight, type Input, type MapData, type Motion, type BoardSide, type PositionSample, type ShotInput } from '../shared/game';
+import { aimRay, collisionCacheStats, movementYaw, samplePosition, hitscan, COMBAT, DEV_SCALE, EDGE_FLIP_SECONDS, FLIP_COOLDOWN_SECONDS, JUMP_HEIGHT_RATIO, PLAYER, initialMotion, MOVEMENT_PROTOCOL, stepMotion, testMap, TICK, WEAPON, tuningForHeight, type Input, type MapData, type Motion, type BoardSide, type PositionSample, type ShotInput } from '../shared/game';
 import type { MatchState, PlayerState } from '../server/state';
 import './style.css';
 import { WEAPONS, WEAPON_IDS, CHARGE, HEAT, type WeaponId } from '../shared/weapons';
@@ -136,7 +136,7 @@ let maxPending = 0, maxCorrection = 0;
   side: local.side ?? 'front', authoritativeSide: room?.state.players.get(room.sessionId)?.side,
   testRemaining: testMove?.remaining ?? 0,
   cameraRoll: camera.rotation.z, worldRotation: world.rotation.x,
-  orbitProgress: boardFlip?.progress ?? null, cameraPosition: camera.position.toArray(), cameraQuaternion: camera.quaternion.toArray(),
+  flipCooldown: local.flipCooldown ?? 0, orbitProgress: boardFlip?.progress ?? null, cameraPosition: camera.position.toArray(), cameraQuaternion: camera.quaternion.toArray(),
 });
 (window as unknown as { __pcbResetPerfWindow: () => void }).__pcbResetPerfWindow = () => { frameTimes.length = 0; playCorrections.length = 0; };
 let wasReloading = false;
@@ -248,8 +248,46 @@ function sound(frequency: number, duration: number, wave: OscillatorType = 'sawt
   } catch { /* audio unavailable */ }
 }
 
-function showFeed(text: string) {
-  const item = document.createElement('div'); item.textContent = text; el('kill-feed').prepend(item);
+let eliminationTimer: ReturnType<typeof setTimeout> | undefined;
+function clearElimination() {
+  clearTimeout(eliminationTimer);
+  el('elimination').classList.add('hidden');
+}
+function showElimination(msg: { name: string; chain: number }) {
+  clearTimeout(eliminationTimer);
+  el('elimination-name').textContent = msg.name;
+  el('elimination-chain').textContent = msg.chain === 2 ? 'DOUBLE KILL' : msg.chain === 3 ? 'TRIPLE KILL' : msg.chain > 3 ? `${msg.chain} KILL STREAK` : '';
+  el('elimination').classList.remove('hidden');
+  eliminationTimer = setTimeout(clearElimination, 2200);
+  // A clean rising chord distinguishes an elimination from the short hit tick.
+  if (volume <= 0) return;
+  try {
+    audioContext ??= new AudioContext();
+    if (audioContext.state === 'suspended') void audioContext.resume();
+    const notes = msg.chain >= 3 ? [660, 880, 1100, 1320] : msg.chain === 2 ? [660, 880, 1100] : [660, 990];
+    notes.forEach((frequency, i) => {
+      const at = audioContext!.currentTime + i * .065;
+      const oscillator = audioContext!.createOscillator(), gain = audioContext!.createGain();
+      oscillator.type = 'sine'; oscillator.frequency.setValueAtTime(frequency, at);
+      gain.gain.setValueAtTime(.001, at); gain.gain.linearRampToValueAtTime(volume * .1, at + .008);
+      gain.gain.exponentialRampToValueAtTime(.001, at + .18);
+      oscillator.connect(gain).connect(audioContext!.destination);
+      oscillator.onended = () => { oscillator.disconnect(); gain.disconnect(); };
+      oscillator.start(at); oscillator.stop(at + .19);
+    });
+  } catch { /* audio unavailable */ }
+}
+function showFeed(text: string, chain = 1) {
+  const item = document.createElement('div');
+  const message = document.createElement('span'); message.textContent = text; item.append(message);
+  if (chain >= 2) {
+    item.classList.add('feed-streak');
+    if (chain >= 3) item.classList.add('feed-streak-hot');
+    const badge = document.createElement('strong'); badge.className = 'feed-streak-badge';
+    badge.textContent = `x${chain}`; badge.setAttribute('aria-label', `${chain} consecutive eliminations`);
+    item.append(badge);
+  }
+  el('kill-feed').prepend(item);
   setTimeout(() => item.remove(), 5000);
   while (el('kill-feed').children.length > 5) el('kill-feed').lastElementChild?.remove();
 }
@@ -321,7 +359,7 @@ function syncState(state: MatchState) {
     if (me.reloading && !wasReloading) sound(570, .22, 'triangle');
     wasReloading = me.reloading;
     const before = local;
-    const authoritative: Motion = { x: me.x, y: me.y, z: me.z, vy: me.vy, grounded: me.grounded, jumpHeld: me.jumpHeld, mantleTarget: me.mantleTarget, side: me.side as BoardSide, transitionCooldown: me.transitionCooldown, headingOffset: me.headingOffset };
+    const authoritative: Motion = { x: me.x, y: me.y, z: me.z, vy: me.vy, grounded: me.grounded, jumpHeld: me.jumpHeld, mantleTarget: me.mantleTarget, side: me.side as BoardSide, transitionCooldown: me.transitionCooldown, flipCooldown: me.flipCooldown, headingOffset: me.headingOffset };
     pending = pending.filter(input => input.seq > me.ack);
     local = pending.reduce((motion, input) => stepMotion(motion, input, map, TICK, undefined, playerTuning), authoritative);
     correction = Math.hypot(local.x - before.x, local.y - before.y, local.z - before.z);
@@ -330,7 +368,7 @@ function syncState(state: MatchState) {
       playCorrections.push(correction); if (playCorrections.length > 2400) playCorrections.splice(0, 1200);
     }
     recordMovement('snapshot', me.ack, correction);
-    if (!me.alive) { local = authoritative; pending = []; }
+    if (!me.alive) { clearElimination(); local = authoritative; pending = []; }
   }
   const present = new Set<string>();
   state.players.forEach((p, id) => {
@@ -388,7 +426,8 @@ async function connect(mode: 'play' | 'create' | 'join' | 'reconnect' | 'practic
     el('room-label').style.pointerEvents = 'auto'; el('room-label').style.cursor = 'pointer';
     history.replaceState(null, '', `?room=${room.roomId}`);
     room.onStateChange(syncState);
-    room.onMessage('feed', (msg: { text: string }) => showFeed(msg.text));
+    room.onMessage('elimination', (msg: { name: string; chain: number }) => showElimination(msg));
+    room.onMessage('feed', (msg: { text: string; chain?: number }) => showFeed(msg.text, msg.chain));
     room.onMessage('shot', (msg: { shooter: string; shotId?: number; weapon?: WeaponId; side: BoardSide; from: number[]; to: number[]; hit?: string }) => {
       if (msg.side === (local.side ?? 'front')) {
         const predicted = msg.shooter === room?.sessionId && msg.shotId !== undefined ? predictedTracers.get(msg.shotId) : undefined;
@@ -413,9 +452,10 @@ async function connect(mode: 'play' | 'create' | 'join' | 'reconnect' | 'practic
     room.onMessage('pickup', (msg: { player: string; amount: number }) => { if (msg.player === room?.sessionId) { showFeed(`+${msg.amount} solder rounds`); sound(710, .16, 'sine'); } });
     room.onDrop(() => { recordMovement('drop', me?.ack ?? 0); mouseDown = false; pending = []; lastSentInput = null; showFeed('Connection lost · reconnecting'); });
     room.onReconnect(() => { const ack = room!.state.players.get(room!.sessionId)?.ack ?? seq; recordMovement('reconnect', ack); pending = []; lastSentInput = null; seq = ack; serverClockOffsetMs = NaN; sessionStorage.setItem('pcb-reconnection-token', room!.reconnectionToken); syncState(room!.state); showFeed('Connection restored'); });
-    room.onLeave(() => { sessionStorage.removeItem('pcb-reconnection-token'); room = null; scalePanel.hidden = true; el('menu').classList.remove('hidden'); el('hud').classList.add('hidden'); document.exitPointerLock(); showFeed('Disconnected from room'); });
+    room.onLeave(() => { clearElimination(); sessionStorage.removeItem('pcb-reconnection-token'); room = null; scalePanel.hidden = true; el('menu').classList.remove('hidden'); el('hud').classList.add('hidden'); document.exitPointerLock(); showFeed('Disconnected from room'); });
     sessionStorage.setItem('pcb-reconnection-token', room.reconnectionToken);
     if (room.state?.players) syncState(room.state);
+    clearElimination();
     visualSide = local.side ?? 'front'; boardFlip = null; renderedHeading = local.headingOffset ?? 0;
     el('menu').classList.add('hidden'); el('hud').classList.remove('hidden');
     if (devScaleEnabled) showFeed('DEV SCALE enabled · press F4 to adjust height');
@@ -489,7 +529,7 @@ setInterval(() => {
     sprint: soakMode || (!testing && locked && (keys.has('ShiftLeft') || keys.has('ShiftRight'))) };
   if (soakMode) soakTick++;
   if (testing && --testMove!.remaining === 0) testMove = null;
-  const repeatedIdle = local.grounded && local.mantleTarget === 0 && (local.transitionCooldown ?? 0) === 0 && input.forward === 0 && input.strafe === 0 && !input.jump && !input.sprint && lastSentInput
+  const repeatedIdle = (local.flipCooldown ?? 0) === 0 && local.grounded && local.mantleTarget === 0 && (local.transitionCooldown ?? 0) === 0 && input.forward === 0 && input.strafe === 0 && !input.jump && !input.sprint && lastSentInput
     && lastSentInput.forward === 0 && lastSentInput.strafe === 0 && !lastSentInput.jump && !lastSentInput.sprint
     && lastSentInput.yaw === input.yaw && lastSentInput.pitch === input.pitch;
   if (repeatedIdle) return;
@@ -550,6 +590,12 @@ function frame(now: number) {
     gunView.visible = true;
     canvas.dataset.side = side;
     el('side-label').textContent = side.toUpperCase();
+    const cooldown = Math.max(0, local.flipCooldown ?? 0);
+    el('flip-cooldown').hidden = !map.back?.enabled;
+    el('flip-cooldown-label').textContent = cooldown > 0 ? `FLIP - ${cooldown.toFixed(1)}s` : 'FLIP READY';
+    el('flip-cooldown-fill').style.width = `${100 * (1 - cooldown / FLIP_COOLDOWN_SECONDS)}%`;
+    el('flip-cooldown-meter').setAttribute('aria-valuenow', String(Math.round(100 * (1 - cooldown / FLIP_COOLDOWN_SECONDS))));
+    el('flip-cooldown-meter').setAttribute('aria-valuetext', cooldown > 0 ? `${cooldown.toFixed(1)} seconds until flip ready` : 'Flip ready');
     // Prediction may switch surfaces before the next snapshot arrives.
     for (const [id, entry] of remotes) {
       const visible = !boardFlip && snapshot.players.get(id)?.side === side;

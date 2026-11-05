@@ -42,8 +42,11 @@ it('runs isolated solo targets with movement control, shared damage and three-se
     const aim = Math.atan2(-victim.x, -victim.z);
     room.send('input', { seq: 1, forward: 0, strafe: 0, yaw: aim, pitch: 0, jump: false, sprint: false });
     await wait(() => room.state.players.get(room.sessionId)?.ack === 1);
+    const eliminations: { name: string; target: string; chain: number }[] = [];
+    room.onMessage('elimination', msg => eliminations.push(msg));
     for (let i = 0; i < 4; i++) { room.send('shoot'); await delay(150); }
     await wait(() => !victim.alive);
+    expect(eliminations).toEqual([{ name: victim.name, target: visible[0], chain: 1 }]);
     const killedAt = Date.now(); await delay(1800); expect(victim.alive).toBe(false);
     await wait(() => victim.alive, 2200); expect(Date.now() - killedAt).toBeGreaterThan(2400); expect(victim.hp).toBe(100);
     expect(room.state.players.get(room.sessionId)?.hp).toBe(100);

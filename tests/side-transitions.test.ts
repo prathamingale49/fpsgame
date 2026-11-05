@@ -1,5 +1,5 @@
 import { expect, it } from 'vitest';
-import { initialMotion, EDGE_FLIP_SECONDS, PLAYER, testMap, transitionEdge, stepMotion, hitscan, aimRay, TICK, type MapData, type BoardSide } from '../shared/game.js';
+import { initialMotion, FLIP_COOLDOWN_SECONDS, EDGE_FLIP_SECONDS, PLAYER, testMap, transitionEdge, stepMotion, hitscan, aimRay, TICK, type MapData, type BoardSide } from '../shared/game.js';
 
 const map: MapData = { ...testMap, back: { enabled: true, thickness: 1.6, boxes: [] } };
 for (const side of ['front', 'back'] as BoardSide[]) for (const [x, z] of [[51, 12], [-51, 12], [12, 37], [12, -37]]) {
@@ -86,7 +86,8 @@ it('repeats front/back crossings indefinitely without changing motion invariants
     motion = next;
   }
   // The flip lock intentionally reduces the number of possible crossings.
-  expect(wraps).toBeGreaterThanOrEqual(35);
+  expect(wraps).toBeGreaterThanOrEqual(12);
+  expect(wraps).toBeLessThanOrEqual(Math.ceil(4000 * TICK / FLIP_COOLDOWN_SECONDS));
 });
 it('resolves diagonal corner wraps without a sustained loop', () => {
   const empty = { ...map, width: 20, depth: 20, boxes: [] };
@@ -100,4 +101,21 @@ it('resolves diagonal corner wraps without a sustained loop', () => {
   expect(wraps).toBeLessThanOrEqual(2);
   expect(Math.abs(motion.x)).toBeLessThan(9.9);
   expect(Math.abs(motion.z)).toBeLessThan(9.9);
+});
+
+it('recharges flips for five seconds without locking movement after the orbit', () => {
+  const empty = { ...map, boxes: [] };
+  let motion = transitionEdge(initialMotion([51, 0, 0]), empty, PLAYER);
+  expect(motion.flipCooldown).toBe(FLIP_COOLDOWN_SECONDS);
+  const input = { seq: 1, forward: 0, strafe: 0, yaw: 0, pitch: 0, jump: false, sprint: false };
+  for (let i = 0; i < 60; i++) motion = stepMotion(motion, input, empty);
+  expect(motion.transitionCooldown).toBe(0);
+  expect(motion.flipCooldown).toBeCloseTo(4);
+  const moved = stepMotion(motion, { ...input, forward: 1, jump: true }, empty);
+  expect(moved.z).not.toBe(motion.z);
+  expect(moved.vy).toBeGreaterThan(0);
+  expect(transitionEdge({ ...motion, x: 51 }, empty, PLAYER).side).toBe('back');
+  for (let i = 0; i < 241; i++) motion = stepMotion(motion, input, empty);
+  expect(motion.flipCooldown).toBe(0);
+  expect(transitionEdge({ ...motion, x: 51 }, empty, PLAYER).side).toBe('front');
 });

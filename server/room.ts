@@ -1,3 +1,4 @@
+import { KillChain } from './kill-chain.js';
 import { Room, type Client } from 'colyseus';
 import { MatchState, PlayerState, PickupState } from './state.js';
 import { WEAPONS, validWeaponId, ironDamage, pumpRays, weaponHits, HEAT, type WeaponId } from '../shared/weapons.js';
@@ -26,6 +27,7 @@ export class GameRoom extends Room {
   private bots = new Map<string, { mode: number; next: number; yaw: number; moving: boolean; sprint: boolean }>();
   maxClients = 8;
   state = new MatchState();
+  private killChain = new KillChain();
   private runtime = new Map<string, Runtime>();
   private hitHistory = new Map<string, PositionSample[]>();
   private elapsed = 0;
@@ -127,6 +129,7 @@ export class GameRoom extends Room {
 
   onDrop(client: Client) {
     this.cancelWeapon(client.sessionId);
+    this.killChain.reset(client.sessionId);
     if (TRACE_MOVEMENT) console.log('MOVE_TRACE', JSON.stringify({ event: 'drop', player: client.sessionId }));
     const p = this.state.players.get(client.sessionId);
     if (p) p.connected = false;
@@ -141,6 +144,7 @@ export class GameRoom extends Room {
   }
 
   onLeave(client: Client) {
+    this.killChain.reset(client.sessionId);
     const p = this.state.players.get(client.sessionId);
     if (p) this.broadcast('feed', { text: `${p.name} disconnected` });
     this.state.players.delete(client.sessionId);
@@ -151,13 +155,14 @@ export class GameRoom extends Room {
   }
 
   private startMatch() {
+    this.killChain.clear();
     this.hitHistory.clear();
     this.elapsed = 0; this.state.seconds = this.matchSeconds; this.state.winner = ''; this.state.phase = 'playing';
     this.state.players.forEach((p) => {
       if (Math.abs(p.x) >= activeMap.width / 2 || Math.abs(p.z) >= activeMap.depth / 2 || p.y < activeMap.ground - 1) {
         const spawn = activeMap.spawns[this.spawnIndex++ % activeMap.spawns.length], motion = initialMotion(spawn);
         p.x = motion.x; p.y = motion.y; p.z = motion.z; p.vy = motion.vy; p.grounded = true;
-        p.side = 'front'; p.transitionCooldown = 0; p.headingOffset = 0;
+        p.side = 'front'; p.transitionCooldown = 0; p.flipCooldown = 0; p.headingOffset = 0;
       }
       p.jumpHeld = false; p.mantleTarget = 0;
       p.kills = 0; p.deaths = 0; p.hp = 100; p.alive = true; p.ammo = WEAPON.magazine; p.reserve = WEAPON.reserve; p.reloading = false;
@@ -218,9 +223,9 @@ export class GameRoom extends Room {
       while (r.credit >= 1 && r.queue.has(r.lastSeq + 1) && processed < 60) {
         const input = r.queue.get(r.lastSeq + 1)!;
         r.queue.delete(input.seq);
-        const motion = stepMotion({ x: p.x, y: p.y, z: p.z, vy: p.vy, grounded: p.grounded, jumpHeld: p.jumpHeld, mantleTarget: p.mantleTarget, side: p.side as BoardSide, transitionCooldown: p.transitionCooldown, headingOffset: p.headingOffset }, input, activeMap, TICK, undefined, this.playerTuning);
+        const motion = stepMotion({ x: p.x, y: p.y, z: p.z, vy: p.vy, grounded: p.grounded, jumpHeld: p.jumpHeld, mantleTarget: p.mantleTarget, side: p.side as BoardSide, transitionCooldown: p.transitionCooldown, flipCooldown: p.flipCooldown, headingOffset: p.headingOffset }, input, activeMap, TICK, undefined, this.playerTuning);
         p.x = motion.x; p.y = motion.y; p.z = motion.z; p.vy = motion.vy; p.grounded = motion.grounded; p.jumpHeld = motion.jumpHeld; p.mantleTarget = motion.mantleTarget;
-        p.side = motion.side ?? 'front'; p.transitionCooldown = motion.transitionCooldown ?? 0; p.headingOffset = motion.headingOffset ?? 0;
+        p.side = motion.side ?? 'front'; p.transitionCooldown = motion.transitionCooldown ?? 0; p.flipCooldown = motion.flipCooldown ?? 0; p.headingOffset = motion.headingOffset ?? 0;
         p.yaw = input.yaw; p.pitch = input.pitch;
         r.lastSeq = input.seq; p.ack = input.seq; r.credit--; processed++;
         if (p.y < activeMap.ground - PLAYER.fallDeathDepth) { this.fall(id, now); break; }
@@ -323,18 +328,22 @@ export class GameRoom extends Room {
       this.cancelWeapon(targetId);
       this.hitHistory.delete(targetId);
       const targetRuntime = this.runtime.get(targetId); if (targetRuntime) targetRuntime.respawnAt = now + (target.npc ? 3 : RESPAWN_SECONDS);
-      this.broadcast('feed', { text: `${p.name} eliminated ${target.name}` });
+      this.killChain.reset(targetId);
+      const chain = this.killChain.record(id, Date.now());
+      this.clients.find(client => client.sessionId === id)?.send('elimination', { target: targetId, name: target.name, chain });
+      this.broadcast('feed', { text: `${p.name} eliminated ${target.name}`, chain });
     }
   }
 
   private respawn(id: string) {
+    this.killChain.reset(id);
     const p = this.state.players.get(id); if (!p) return;
     this.hitHistory.delete(id);
     const spawn = p.npc ? this.botSpawn(Number(id.slice(4))) : activeMap.spawns[this.spawnIndex++ % activeMap.spawns.length];
     const m = initialMotion(spawn);
     p.x = m.x; p.y = m.y; p.z = m.z; p.vy = 0; p.grounded = true; p.jumpHeld = false; p.mantleTarget = 0;
-    p.side = 'front'; p.transitionCooldown = 0; p.headingOffset = 0;
     this.cancelWeapon(id); this.weapons.delete(id); p.weapon = 'solder'; p.specialWeapon = ''; p.heat = 0; p.overheated = false; p.weaponReadyAt = 0;
+    p.side = 'front'; p.transitionCooldown = 0; p.flipCooldown = 0; p.headingOffset = 0;
     p.hp = 100; p.alive = true; p.ammo = WEAPON.magazine; p.reserve = WEAPON.reserve; p.reloading = false;
     const r = this.runtime.get(id); if (r) { r.queue.clear(); r.credit = 0; r.lastSeq = r.lastReceived; p.ack = r.lastSeq; }
     this.broadcast('feed', { text: `${p.name} respawned` });
