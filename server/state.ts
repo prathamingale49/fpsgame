@@ -24,7 +24,7 @@ export const WeaponPickupState = schema({ x: t.float32(), y: t.float32(), z: t.f
 export const MatchState = schema({
   players: t.map(PlayerState),
   practice: t.boolean().default(false), npcMovement: t.boolean().default(true),
-  pickupPractice: t.boolean().default(false), weaponPickups: t.map(WeaponPickupState),
+  weaponPickups: t.map(WeaponPickupState),
   pickups: t.map(PickupState),
   phase: t.string().default('waiting'),
   seconds: t.uint16().default(300),
