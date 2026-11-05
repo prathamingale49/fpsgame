@@ -7,6 +7,10 @@ export const WEAPONS = {
   pump: { id: 'pump', name: 'Desoldering Pump', mode: 'pellets', damage: 12, magazine: 6, reserve: 36, fireInterval: 1, reloadSeconds: 2, range: 12 },
 } as const;
 export type WeaponId = keyof typeof WEAPONS;
+export function weaponKillMessage(id: WeaponId, attacker: string, target: string): string {
+  const verb = { solder: 'reflowed', iron: 'precision-soldered', air: 'heat-soaked', pump: 'desoldered' }[id];
+  return `${attacker} ${verb} ${target} with ${WEAPONS[id].name}`;
+}
 export const WEAPON_IDS = Object.keys(WEAPONS) as WeaponId[];
 export const CHARGE = { minimum: .15, full: 1 } as const;
 export const HEAT = { duration: 3, cooling: 2, pulse: .1, halfAngle: 17.5 * Math.PI / 180, lease: .45 } as const;
