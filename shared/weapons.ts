@@ -9,8 +9,15 @@ export const WEAPONS = {
 } as const;
 export type WeaponId = keyof typeof WEAPONS;
 export function weaponKillMessage(id: WeaponId, attacker: string, target: string): string {
-  const verb = { solder: 'reflowed', iron: 'precision-soldered', air: 'heat-soaked', pump: 'desoldered', sniper: 'capacitor-discharged' }[id];
-  return `${attacker} ${verb} ${target} with ${WEAPONS[id].name}`;
+  const messages = {
+    solder: ['reflowed', 'soldering iron'],
+    iron: ['soldered', 'precision iron'],
+    air: ['heat-gunned', 'hot-air gun'],
+    pump: ['desoldered', 'desoldering pump'],
+    sniper: ['shorted', 'capacitor sniper'],
+  } as const;
+  const [verb, gun] = messages[id];
+  return `${attacker} ${verb} ${target} with a <${gun}>`;
 }
 export const WEAPON_IDS: WeaponId[] = ['solder', 'iron', 'air', 'pump', 'sniper'];
 export const CHARGE = { minimum: 0, full: 1 } as const;
