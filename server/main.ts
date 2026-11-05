@@ -2,7 +2,7 @@ import { defineServer, defineRoom } from 'colyseus';
 import express from 'express';
 import { existsSync, readFileSync } from 'node:fs';
 import path from 'node:path';
-import { GameRoom, PracticeRoom, PickupPracticeRoom, setActiveMap, activeMap, serverPerf, DEV_SCALE_ENABLED } from './room.js';
+import { GameRoom, PracticeRoom, setActiveMap, activeMap, serverPerf, DEV_SCALE_ENABLED } from './room.js';
 import type { MapData } from '../shared/game.js';
 import { MOVEMENT_PROTOCOL, testMap } from '../shared/game.js';
 
@@ -15,7 +15,7 @@ if (existsSync(mapFile)) {
 }
 if (process.env.PCB_TEST_MAP === '1') setActiveMap({ ...testMap, boxes: [], spawns: [[0, 0, 0], [0, 0, -12], [8, 0, 0]] });
 const app = defineServer({
-  rooms: { pcb: defineRoom(GameRoom), practice: defineRoom(PracticeRoom), 'practice-pickups': defineRoom(PickupPracticeRoom) },
+  rooms: { pcb: defineRoom(GameRoom), practice: defineRoom(PracticeRoom) },
   express: (router) => {
     router.get('/api/health', (_req, res) => res.json({ ok: true, map: activeMap.id, movementProtocol: MOVEMENT_PROTOCOL,
       devScaleEnabled: DEV_SCALE_ENABLED,
