@@ -19,7 +19,8 @@ try {
   await page.keyboard.press('F6'); await page.waitForFunction(() => document.querySelector('#player-count')?.textContent?.includes('FREEZE'));
   if (await page.locator('.brand').textContent() !== 'YJSPS') throw new Error('Brand mismatch');
   fs.mkdirSync('artifacts', { recursive: true }); await page.screenshot({ path: 'artifacts/solo-practice.png' });
-  await page.keyboard.press('Escape'); await page.locator('#leave').click();
+  await page.evaluate(() => document.exitPointerLock());
+  await page.locator('#leave').click();
   await page.locator('#menu:not(.hidden)').waitFor(); await page.locator('#create').click();
   await page.waitForFunction(() => document.querySelector('#player-count')?.textContent?.includes('1 / 8 PLAYERS'));
   if (errors.length) throw new Error(errors.join('\n'));

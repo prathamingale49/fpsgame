@@ -21,7 +21,15 @@ checkpoint is the commit containing this document (`git log -1`).
 Focused integration test passes: immediate solo play, five NPCs, stationary and
 moving targets, obstacle/edge checks, freeze/resume, damage/kill/3s respawn,
 no NPC shots, private capacity and unchanged public waiting behavior.
-Remaining: full suite/build, real BMS browser check, push branch/open PR to main.
+Full suite: 68 tests passed. Production build passed. Real BMS Chrome browser
+check passed practice entry, F5 wireframes, F6 freeze/resume, YJSPS branding,
+and leaving practice to enter normal multiplayer; zero browser errors.
+Screenshot `artifacts/solo-practice.png` visually inspected (cyan hitboxes,
+rocket targets, health bars, white/gold YJSPS). Remaining: push/open PR to main.
+Final focused repeat and TypeScript pass. The seeded fixture verifies actual
+resumed motion and selects a visible target so legitimate NPC occlusion does
+not make the combat check flaky. Production code matches the full-suite/build
+and browser-verified revision. No required implementation work remains.
 Known limits: simple steering can stop against components; no pathfinding.
 
 Run npm run dev and click SOLO PRACTICE at http://localhost:5173.
