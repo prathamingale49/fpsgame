@@ -8,10 +8,15 @@ import type { MatchState } from '../server/state.js';
 
 it('keeps concurrent practice maps isolated and ignores map requests in public rooms', async () => {
   const port = 26714;
-  const server = spawn(process.execPath, ['--import', 'tsx', 'tests/fixtures/map-isolation-server.ts'], { env: { ...process.env, PORT: String(port) }, stdio: 'ignore' });
+  const server = spawn(process.execPath, ['--import', 'tsx', 'tests/fixtures/map-isolation-server.ts'], { env: { ...process.env, PORT: String(port) }, stdio: ['ignore', 'pipe', 'pipe'] });
+  let ready = false, logs = '';
+  server.stdout?.on('data', chunk => { logs += chunk; if (logs.includes('MAP_ISOLATION_READY')) ready = true; });
+  server.stderr?.on('data', chunk => { logs += chunk; });
   const rooms: Room<MatchState>[] = [];
   try {
-    await delay(1500);
+    const startupDeadline = Date.now() + 8000;
+    while (!ready && server.exitCode === null && Date.now() < startupDeadline) await delay(25);
+    expect(ready, logs).toBe(true);
     const client = new Client(`ws://localhost:${port}`);
     for (const [kind, id, expected] of [['practice','recovery','recovery'], ['practice','flight-sam','flight-sam'], ['pcb','recovery','bms'], ['practice',undefined,'bms']]) {
       const room = await client.create<MatchState>(kind!, { protocol: MOVEMENT_PROTOCOL, mapId: id }); rooms.push(room);

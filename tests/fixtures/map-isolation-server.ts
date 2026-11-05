@@ -8,3 +8,5 @@ for (const id of ['bms', 'recovery', 'flight-sam']) {
   if (id === 'bms') setActiveMap(map);
 }
 await defineServer({ rooms: { pcb: defineRoom(GameRoom), practice: defineRoom(PracticeRoom) } }).listen(Number(process.env.PORT));
+
+console.log('MAP_ISOLATION_READY');

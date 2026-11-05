@@ -38,7 +38,7 @@ Eight front spawns are selected from the largest connected region of a 2 mm grid
 ## Verification
 
 - Production build passes (TypeScript, Vite, server bundle); Vite reports the existing large client bundle advisory.
-- Full suite: 119 tests pass in 15 files. The subsequently added concurrent-map isolation test also passes; targeted map tests pass 4/4.
+- Latest full run: 121 tests passed; the isolation test initially connected before its fixture was ready. Replaced its fixed startup delay with an explicit readiness signal and reran it successfully. All 122 tests are verified across the full run and that targeted rerun. Slot/transition/orbit tests pass 33/33.
 - Practice browser check passes for all three maps: model loading, matching client/server map IDs, all five weapon slots, F5 hitboxes, F6 freeze/resume, returning to the menu, switching boards, and then creating a BMS public room. No browser page errors.
 - Recovery and Flight SAM each pass all four outer-edge round trips with actual CAD geometry, correct side labels and camera/world orientation, synchronized side changes on a second client, and no browser page errors. Recovery's south return lands on an 8.83 mm component.
 - Updated front/back browser renders were inspected and saved under `docs/screenshots/practice-maps`, including a Flight SAM slot flip. Both bottom masks show distinct copper pads and yellow markings. All three slot edges pass front/back round trips with no browser errors.
