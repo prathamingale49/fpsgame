@@ -14,6 +14,8 @@ export function safeName(value: unknown): string {
 }
 
 export class GameRoom extends Room {
+  practice: boolean = false;
+  private bots = new Map<string, { mode: number; next: number; yaw: number; moving: boolean; sprint: boolean }>();
   maxClients = 8;
   state = new MatchState();
   private runtime = new Map<string, Runtime>();
@@ -28,6 +30,9 @@ export class GameRoom extends Room {
   private playerTuning: PlayerTuning = PLAYER;
 
   onCreate() {
+    this.state.practice = this.practice;
+    if (this.practice) { this.maxClients = 1; void this.setPrivate(true); }
+    this.onMessage('practice:movement', () => { if (this.practice) this.state.npcMovement = !this.state.npcMovement; });
     this.roomId = Math.random().toString(36).slice(2, 8).toUpperCase();
     this.state.mapId = activeMap.id;
     this.state.playerHeight = this.playerTuning.height;
@@ -78,7 +83,8 @@ export class GameRoom extends Room {
     const p = new PlayerState({ name: safeName(options?.name), x: spawn[0], y: spawn[1], z: spawn[2] });
     this.state.players.set(client.sessionId, p);
     this.runtime.set(client.sessionId, { queue: new Map(), lastReceived: 0, lastSeq: 0, credit: 0, lastShot: -Infinity, lastShotId: -1, reloadAt: 0, respawnAt: 0 });
-    if (this.state.players.size >= 2 && this.state.phase === 'waiting') this.startMatch();
+    if (this.practice) { this.startMatch(); this.spawnBots(); }
+    else if (this.state.players.size >= 2 && this.state.phase === 'waiting') this.startMatch();
     this.broadcast('feed', { text: `${p.name} connected` });
   }
 
@@ -102,7 +108,7 @@ export class GameRoom extends Room {
     this.state.players.delete(client.sessionId);
     this.runtime.delete(client.sessionId);
     this.hitHistory.delete(client.sessionId);
-    if (this.state.players.size < 2 && this.state.phase === 'playing') this.state.phase = 'waiting';
+    if (!this.practice && this.state.players.size < 2 && this.state.phase === 'playing') this.state.phase = 'waiting';
   }
 
   private startMatch() {
@@ -129,7 +135,7 @@ export class GameRoom extends Room {
     const elapsed = Math.max(0, Math.min((tickAt - this.lastTickAt) / 1000, 1));
     this.lastTickAt = tickAt;
     this.state.pickups.forEach((pickup, id) => { if (!pickup.active && now >= (this.pickupRespawns.get(id) ?? Infinity)) { pickup.active = true; this.pickupRespawns.delete(id); } });
-    if (this.state.phase === 'playing') {
+    if (this.state.phase === 'playing' && !this.practice) {
       this.elapsed += elapsed;
       this.state.seconds = Math.max(0, Math.ceil(this.matchSeconds - this.elapsed));
       if (this.elapsed >= this.matchSeconds) {
@@ -149,7 +155,17 @@ export class GameRoom extends Room {
         p.ammo += count; p.reserve -= count; p.reloading = false;
       }
       if (!p.connected) return;
+      if (p.npc && !this.state.npcMovement) { r.credit = 0; return; }
       r.credit = Math.min(60, r.credit + elapsed / TICK);
+      if (p.npc) {
+        const bot = this.bots.get(id)!;
+        if (now >= bot.next) { bot.next = now + 1 + Math.random() * 2; bot.yaw = Math.random() * Math.PI * 2; bot.moving = bot.mode !== 0 && Math.random() > .2; bot.sprint = bot.mode === 2 && Math.random() < .4; if (!bot.moving) bot.next = now + .5 + Math.random() * 1.5; }
+        if (Math.abs(p.x) > activeMap.width / 2 - 3 || Math.abs(p.z) > activeMap.depth / 2 - 3) bot.yaw = Math.atan2(p.x, p.z) - p.headingOffset;
+        for (let i = 0; i < Math.floor(r.credit); i++) {
+          const seq = ++r.lastReceived;
+          r.queue.set(seq, { seq, forward: bot.moving ? 1 : 0, strafe: 0, yaw: bot.yaw, pitch: 0, jump: bot.mode === 2 && bot.moving && Math.random() < .006, sprint: bot.sprint });
+        }
+      }
       let processed = 0;
       while (r.credit >= 1 && r.queue.has(r.lastSeq + 1) && processed < 60) {
         const input = r.queue.get(r.lastSeq + 1)!;
@@ -213,7 +229,7 @@ export class GameRoom extends Room {
     // send their instantaneous aim and the timestamp of what they actually saw.
     if (payload !== undefined && payload !== null && !validShotInput(payload)) return;
     const shot: ShotInput | undefined = payload === undefined || payload === null ? undefined : payload as ShotInput;
-    if (!p || !r || !p.alive || !p.connected || this.state.phase !== 'playing' || p.reloading || now - r.lastShot < WEAPON.fireInterval) return;
+    if (!p || p.npc || !r || !p.alive || !p.connected || this.state.phase !== 'playing' || p.reloading || now - r.lastShot < WEAPON.fireInterval) return;
     if (shot && (shot.shotId <= r.lastShotId || shot.seq > r.lastReceived + 1 || shot.seq < r.lastSeq - 120)) return;
     if (p.ammo <= 0) { this.reload(id); return; }
     if (shot) r.lastShotId = shot.shotId;
@@ -236,7 +252,7 @@ export class GameRoom extends Room {
     if (target.hp === 0) {
       target.alive = false; target.deaths++; p.kills++;
       this.hitHistory.delete(result.target);
-      const targetRuntime = this.runtime.get(result.target); if (targetRuntime) targetRuntime.respawnAt = now + RESPAWN_SECONDS;
+      const targetRuntime = this.runtime.get(result.target); if (targetRuntime) targetRuntime.respawnAt = now + (target.npc ? 3 : RESPAWN_SECONDS);
       this.broadcast('feed', { text: `${p.name} eliminated ${target.name}` });
     }
   }
@@ -244,7 +260,7 @@ export class GameRoom extends Room {
   private respawn(id: string) {
     const p = this.state.players.get(id); if (!p) return;
     this.hitHistory.delete(id);
-    const spawn = activeMap.spawns[this.spawnIndex++ % activeMap.spawns.length];
+    const spawn = p.npc ? this.botSpawn(Number(id.slice(4))) : activeMap.spawns[this.spawnIndex++ % activeMap.spawns.length];
     const m = initialMotion(spawn);
     p.x = m.x; p.y = m.y; p.z = m.z; p.vy = 0; p.grounded = true; p.jumpHeld = false; p.mantleTarget = 0;
     p.side = 'front'; p.transitionCooldown = 0; p.headingOffset = 0;
@@ -252,4 +268,29 @@ export class GameRoom extends Room {
     const r = this.runtime.get(id); if (r) { r.queue.clear(); r.credit = 0; r.lastSeq = r.lastReceived; p.ack = r.lastSeq; }
     this.broadcast('feed', { text: `${p.name} respawned` });
   }
+
+  private botSpawn(index: number): [number, number, number] {
+    const human = [...this.state.players.values()].find(p => !p.npc);
+    const origin = human ?? { x: activeMap.spawns[0][0], z: activeMap.spawns[0][2] };
+    for (let radius = 4; radius <= 18; radius += 2) for (let k = 0; k < 32; k++) {
+      const angle = (k + index * 6) * Math.PI / 16;
+      const x = origin.x + Math.sin(angle) * radius, z = origin.z - Math.cos(angle) * radius;
+      if (Math.abs(x) > activeMap.width / 2 - 2 || Math.abs(z) > activeMap.depth / 2 - 2) continue;
+      if (activeMap.boxes.some(b => x + this.playerTuning.radius > b.min[0] && x - this.playerTuning.radius < b.max[0] && z + this.playerTuning.radius > b.min[2] && z - this.playerTuning.radius < b.max[2])) continue;
+      if ([...this.state.players.values()].some(p => p.npc && Math.hypot(p.x - x, p.z - z) < 1)) continue;
+      return [x, activeMap.ground, z];
+    }
+    return activeMap.spawns[index % activeMap.spawns.length];
+  }
+
+  private spawnBots() {
+    for (let i = 0; i < 5; i++) {
+      const id = `npc-${i}`, spawn = this.botSpawn(i);
+      this.state.players.set(id, new PlayerState({ npc: true, name: `${i === 0 ? 'Precision' : i < 3 ? 'Walking' : 'Dynamic'} ${i + 1}`, x: spawn[0], y: spawn[1], z: spawn[2] }));
+      this.bots.set(id, { mode: i === 0 ? 0 : i < 3 ? 1 : 2, next: 0, yaw: 0, moving: false, sprint: false });
+      this.runtime.set(id, { queue: new Map(), lastReceived: 0, lastSeq: 0, credit: 0, lastShot: -Infinity, lastShotId: -1, reloadAt: 0, respawnAt: 0 });
+    }
+  }
 }
+
+export class PracticeRoom extends GameRoom { practice = true; }
