@@ -5,7 +5,7 @@ Two solo configurations are available: **SOLO PRACTICE** is the weapon sandbox
 carry one special weapon. Press **E** at a floating weapon to collect/replace it
 and **Q** to swap between your permanent Blaster and carried special. Pickups
 respawn after 15 seconds; death/respawn restores the Blaster-only inventory.
-Nine weapon pickups (three of each) use deterministic map-seeded clusters on reachable clear-floor locations across the front/back
+Nine weapon pickups (three of each) are independently randomized per room and spread across reachable clear-floor locations on the front/back
 surfaces and never appear in public multiplayer. Ammo pickups remain separate.
 
 Each gun has a distinct procedural model and animation: Blaster recoil/heated
