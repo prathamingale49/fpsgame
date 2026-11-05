@@ -20,7 +20,7 @@ beforeAll(async () => {
   throw new Error(`Weapon test server failed: ${serverLog}`);
 }, 30000);
 afterAll(async () => { for (const r of rooms) await r.leave(); server.kill(); });
-it('keeps multiplayer solder-only and rejects invalid selection/actions', async () => {
+it('rejects multiplayer weapon selection before pickups', async () => {
   const r = await open('pcb'); r.send('weapon:select', 'iron'); r.send('weapon:select', '__proto__'); trigger(r, 'start');
   await delay(120); expect(human(r).weapon).toBe('solder'); expect(human(r).ammo).toBe(30); expect(human(r).chargeStarted).toBe(0);
 });
@@ -69,10 +69,14 @@ it('clears held charge and restores default inventory on real falling death and 
     expect(human(r).ammo).toBe(30); expect(human(r).triggerHeld).toBe(false); expect(human(r).heat).toBe(0);
   } finally { clearInterval(timer); }
 }, 12000);
-it('validates pickup versions/distance, carries one special, preserves primary ammo and resets on death', async () => {
-  const r = await open('practice-pickups'); await wait(() => r.state.weaponPickups?.size === 3);
+it('validates multiplayer pickup versions/distance, carries one special, preserves primary ammo and resets on death', async () => {
+  const r = await open('pcb'); const peer = await new Client(`ws://localhost:${port}`).joinById<MatchState>(r.roomId, { protocol: MOVEMENT_PROTOCOL }); rooms.push(peer);
+  await wait(() => r.state.phase === 'playing' && r.state.weaponPickups?.size === 9);
   const p = human(r);
-  expect(r.state.pickupPractice).toBe(true); expect(p.specialWeapon).toBe('');
+  expect([...r.state.weaponPickups.values()].filter(p => p.weapon === 'iron')).toHaveLength(3);
+  expect([...r.state.weaponPickups.values()].filter(p => p.weapon === 'air')).toHaveLength(3);
+  expect([...r.state.weaponPickups.values()].filter(p => p.weapon === 'pump')).toHaveLength(3);
+  expect(r.state.practice).toBe(false); expect(p.specialWeapon).toBe('');
   r.send('weapon:select', 'pump'); r.send('weapon:collect', { id: '2', version: 0 }); r.send('weapon:collect', { id: 'bogus', version: 0 });
   await delay(100); expect(p.weapon).toBe('solder'); expect(p.specialWeapon).toBe('');
   const collect = (id: string, version = r.state.weaponPickups.get(id)!.version) => r.send('weapon:collect', { id, version });
