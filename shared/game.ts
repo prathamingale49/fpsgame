@@ -1,5 +1,6 @@
 export const TICK = 1 / 60;
 export const MOVEMENT_PROTOCOL = 5;
+export const EDGE_FLIP_SECONDS = .9;
 export const MATCH_SECONDS = 300;
 export const RESPAWN_SECONDS = 2.5;
 export type PlayerTuning = { radius: number; height: number; eye: number; walkSpeed: number; sprintSpeed: number; jumpSpeed: number; gravity: number; mantleSpeed: number; mantleReach: number; fallDeathDepth: number };
@@ -102,7 +103,7 @@ export function transitionEdge(motion: Motion, map: MapData, tuning: PlayerTunin
   // Snap the two orientations so synchronized float32 round-off cannot
   // accumulate over an unlimited number of wraps.
   const headingOffset = xOutside ? ((motion.headingOffset ?? 0) > 1 ? 0 : Math.PI) : (motion.headingOffset ?? 0);
-  return { ...motion, x, z, y: y + .02, vy: 0, grounded: false, mantleTarget: 0, side, headingOffset, transitionCooldown: .25 };
+  return { ...motion, x, z, y: y + .02, vy: 0, grounded: true, mantleTarget: 0, side, headingOffset, transitionCooldown: EDGE_FLIP_SECONDS };
 }
 
 export const testMap: MapData = {
@@ -167,6 +168,12 @@ function overlaps(x: number, y: number, z: number, box: Box, tuning: PlayerTunin
 
 export function stepMotion(previous: Motion, input: Input, map: MapData, dt = TICK, stats?: MotionStats, tuning: PlayerTuning = PLAYER): Motion {
   const rootMap = map;
+  // The flip is part of authoritative movement, not merely a visual effect.
+  // Keep the player at the arrival point until the animation has completed.
+  if ((previous.transitionCooldown ?? 0) > 0) return transitionEdge({
+    ...previous, vy: 0, grounded: true, jumpHeld: input.jump,
+    transitionCooldown: Math.max(0, (previous.transitionCooldown ?? 0) - dt),
+  }, rootMap, tuning);
   input = { ...input, yaw: movementYaw(input.yaw, previous) };
   map = surfaceMap(map, previous.side);
   const out = { ...previous, transitionCooldown: Math.max(0, (previous.transitionCooldown ?? 0) - dt) };

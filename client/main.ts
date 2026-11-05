@@ -1,9 +1,10 @@
 import * as THREE from 'three';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 import { Client, type Room } from '@colyseus/sdk';
-import { aimRay, collisionCacheStats, movementYaw, samplePosition, hitscan, COMBAT, DEV_SCALE, JUMP_HEIGHT_RATIO, PLAYER, initialMotion, MOVEMENT_PROTOCOL, stepMotion, testMap, TICK, WEAPON, tuningForHeight, type Input, type MapData, type Motion, type BoardSide, type PositionSample, type ShotInput } from '../shared/game';
+import { aimRay, collisionCacheStats, movementYaw, samplePosition, hitscan, COMBAT, DEV_SCALE, EDGE_FLIP_SECONDS, JUMP_HEIGHT_RATIO, PLAYER, initialMotion, MOVEMENT_PROTOCOL, stepMotion, testMap, TICK, WEAPON, tuningForHeight, type Input, type MapData, type Motion, type BoardSide, type PositionSample, type ShotInput } from '../shared/game';
 import type { MatchState, PlayerState } from '../server/state';
 import './style.css';
+import { EdgeOrbit } from './edge-orbit';
 
 const el = <T extends HTMLElement>(id: string) => document.getElementById(id) as T;
 const canvas = el<HTMLCanvasElement>('game');
@@ -32,6 +33,13 @@ let devScaleEnabled = false;
 let lastSentInput: Input | null = null;
 let nextInputAt = performance.now();
 let yaw = 0, pitch = 0, seq = 0, mouseDown = false, lastShot = 0;
+type BoardFlip = { orbit: EdgeOrbit; started: number; sourceHeading: number; progress: number };
+let renderedHeading = 0;
+const orbitTarget = new THREE.Vector3();
+const orbitLook = new THREE.Quaternion();
+const orbitEuler = new THREE.Euler(0, 0, 0, 'YXZ');
+let visualSide: BoardSide = 'front';
+let boardFlip: BoardFlip | null = null;
 let nextShotId = 0, serverClockOffsetMs = NaN, lastViewTime = 0;
 let sensitivity = Number(localStorage.getItem('pcb-sensitivity')) || .0022;
 let volume = Number(localStorage.getItem('pcb-volume') ?? '.25');
@@ -110,6 +118,7 @@ let maxPending = 0, maxCorrection = 0;
   side: local.side ?? 'front', authoritativeSide: room?.state.players.get(room.sessionId)?.side,
   testRemaining: testMove?.remaining ?? 0,
   cameraRoll: camera.rotation.z, worldRotation: world.rotation.x,
+  orbitProgress: boardFlip?.progress ?? null, cameraPosition: camera.position.toArray(), cameraQuaternion: camera.quaternion.toArray(),
 });
 (window as unknown as { __pcbResetPerfWindow: () => void }).__pcbResetPerfWindow = () => { frameTimes.length = 0; playCorrections.length = 0; };
 let wasReloading = false;
@@ -375,6 +384,7 @@ async function connect(mode: 'play' | 'create' | 'join' | 'reconnect') {
     room.onLeave(() => { sessionStorage.removeItem('pcb-reconnection-token'); room = null; scalePanel.hidden = true; el('menu').classList.remove('hidden'); el('hud').classList.add('hidden'); document.exitPointerLock(); showFeed('Disconnected from room'); });
     sessionStorage.setItem('pcb-reconnection-token', room.reconnectionToken);
     if (room.state?.players) syncState(room.state);
+    visualSide = local.side ?? 'front'; boardFlip = null; renderedHeading = local.headingOffset ?? 0;
     el('menu').classList.add('hidden'); el('hud').classList.remove('hidden');
     if (devScaleEnabled) showFeed('DEV SCALE enabled · press F4 to adjust height');
     if (mode === 'reconnect') el('pause').classList.remove('hidden'); else void canvas.requestPointerLock();
@@ -421,7 +431,7 @@ setInterval(() => {
     sprint: soakMode || (!testing && locked && (keys.has('ShiftLeft') || keys.has('ShiftRight'))) };
   if (soakMode) soakTick++;
   if (testing && --testMove!.remaining === 0) testMove = null;
-  const repeatedIdle = local.grounded && local.mantleTarget === 0 && input.forward === 0 && input.strafe === 0 && !input.jump && !input.sprint && lastSentInput
+  const repeatedIdle = local.grounded && local.mantleTarget === 0 && (local.transitionCooldown ?? 0) === 0 && input.forward === 0 && input.strafe === 0 && !input.jump && !input.sprint && lastSentInput
     && lastSentInput.forward === 0 && lastSentInput.strafe === 0 && !lastSentInput.jump && !lastSentInput.sprint
     && lastSentInput.yaw === input.yaw && lastSentInput.pitch === input.pitch;
   if (repeatedIdle) return;
@@ -440,7 +450,7 @@ function frame(now: number) {
   frameTimes.push(elapsedMs); if (frameTimes.length > 2400) frameTimes.splice(0, 1200);
   if (room && snapshot) {
     const me = snapshot.players.get(room.sessionId);
-    if (mouseDown && document.pointerLockElement === canvas && me?.alive && !me.reloading && me.ammo > 0 && now - lastShot >= WEAPON.fireInterval * 1000) {
+    if (mouseDown && document.pointerLockElement === canvas && me?.alive && !me.reloading && (local.transitionCooldown ?? 0) === 0 && !boardFlip && me.ammo > 0 && now - lastShot >= WEAPON.fireInterval * 1000) {
       const shotId = ++nextShotId;
       const shot: ShotInput = { shotId, seq, yaw, pitch, viewTime: lastViewTime || undefined };
       room.send('shoot', shot); lastShot = now; gunView.position.z = -.09; gunView.rotation.x = .09; muzzle.visible = true; sound(235, .07);
@@ -450,19 +460,41 @@ function frame(now: number) {
       const predicted = hitscan(ray, map, [], room.sessionId, playerTuning, local.side ?? 'front');
       predictedTracers.set(shotId, addTracer(ray.origin, ray.origin.map((value, i) => value + ray.direction[i] * predicted.distance)));
     }
+    const side = local.side ?? 'front';
+    if (!me?.alive) boardFlip = null;
+    if (side !== visualSide) {
+      if (map.back?.enabled && me?.alive && (local.transitionCooldown ?? 0) > 0 && !boardFlip) {
+        // Heading changes only at X edges. Use the actual crossed edge, including corners.
+        const xEdge = Math.abs((local.headingOffset ?? 0) - renderedHeading) > 1;
+        boardFlip = { orbit: new EdgeOrbit(camera.position, map, playerTuning.height, xEdge), started: now,
+          sourceHeading: renderedHeading, progress: 0 };
+      } else boardFlip = null; // Respawn/reconnect is not an edge crossing.
+      visualSide = side;
+    }
     camera.position.set(local.x, local.y + playerTuning.eye, local.z);
     canvas.dataset.position = `${local.x.toFixed(2)},${local.y.toFixed(2)},${local.z.toFixed(2)}`;
-    camera.rotation.order = 'YXZ'; camera.rotation.y = movementYaw(yaw, local); camera.rotation.x = pitch; camera.rotation.z = 0;
-    const back = local.side === 'back' && map.back?.enabled;
+    camera.rotation.order = 'YXZ'; camera.rotation.set(pitch, movementYaw(yaw, local), 0);
+    const back = side === 'back' && map.back?.enabled;
     world.rotation.x = back ? Math.PI : 0; world.position.y = back ? -map.back!.thickness : 0;
-    canvas.dataset.side = local.side ?? 'front';
-    el('side-label').textContent = (local.side ?? 'front').toUpperCase();
+    if (boardFlip) {
+      // Render time, not 60 Hz input acknowledgements, drives the smooth camera path.
+      const t = Math.min(1, (now - boardFlip.started) / (EDGE_FLIP_SECONDS * 1000));
+      boardFlip.progress = t;
+      orbitTarget.copy(camera.position);
+      orbitLook.setFromEuler(orbitEuler.set(pitch, yaw + boardFlip.sourceHeading, 0));
+      boardFlip.orbit.sample(t, orbitTarget, orbitLook, camera.position, camera.quaternion);
+      if (t >= 1) boardFlip = null;
+    }
+    renderedHeading = local.headingOffset ?? 0;
+    gunView.visible = true;
+    canvas.dataset.side = side;
+    el('side-label').textContent = side.toUpperCase();
     // Prediction may switch surfaces before the next snapshot arrives.
     for (const [id, entry] of remotes) {
-      const visible = snapshot.players.get(id)?.side === (local.side ?? 'front');
+      const visible = !boardFlip && snapshot.players.get(id)?.side === side;
       entry.mesh.visible = visible; entry.healthBar.visible = visible;
     }
-    for (const [id, mesh] of spoolMeshes) { const pickup = snapshot.pickups.get(id); mesh.visible = !!pickup?.active && pickup.side === (local.side ?? 'front'); }
+    for (const [id, mesh] of spoolMeshes) { const pickup = snapshot.pickups.get(id); mesh.visible = !boardFlip && !!pickup?.active && pickup.side === side; }
     gunView.position.z += (0 - gunView.position.z) * Math.min(1, dt * 16);
     gunView.rotation.x += ((me?.reloading ? -.65 : 0) - gunView.rotation.x) * Math.min(1, dt * 12);
     if (now - lastShot > 45) muzzle.visible = false;

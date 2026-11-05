@@ -45,6 +45,12 @@ it('synchronizes repeated wraps without deaths and isolates combat between surfa
     const pa = () => a!.state.players.get(a!.sessionId)!;
     const pb = () => a!.state.players.get(b!.sessionId)!;
     expect(pa().deaths).toBe(0); expect(pa().hp).toBe(100);
+    // Shooting through the flip would undermine the movement lock.
+    a!.send('shoot');
+    await delay(125);
+    expect(pa().ammo).toBe(30);
+    await move(a!, 56, 0);
+    expect(pa().transitionCooldown).toBe(0);
     const aim = Math.atan2(-(pb().x - pa().x), -(pb().z - pa().z));
     await move(a!, 1, 0, aim);
     a!.send('shoot');
@@ -59,10 +65,10 @@ it('synchronizes repeated wraps without deaths and isolates combat between surfa
     a!.send('shoot');
     await wait(() => pb().hp === 75 && b!.state.players.get(b!.sessionId)?.hp === 75);
     const remainingAmmo = pa().ammo;
-    await move(a!, 65, 1, 0);
+    await move(a!, 95, 1, 0);
     await wait(() => pa().side === 'front' && b!.state.players.get(a!.sessionId)?.side === 'front');
     expect(pa().deaths).toBe(0); expect(pa().kills).toBe(0);
     expect(pa().hp).toBe(100); expect(pa().ammo).toBe(remainingAmmo);
     expect(a!.state.phase).toBe('playing');
   } finally { await a?.leave(); await b?.leave(); server.kill(); }
-}, 18000);
+}, 22000);
