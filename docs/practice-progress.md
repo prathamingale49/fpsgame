@@ -25,7 +25,11 @@ Full suite: 68 tests passed. Production build passed. Real BMS Chrome browser
 check passed practice entry, F5 wireframes, F6 freeze/resume, YJSPS branding,
 and leaving practice to enter normal multiplayer; zero browser errors.
 Screenshot `artifacts/solo-practice.png` visually inspected (cyan hitboxes,
-rocket targets, health bars, white/gold YJSPS). Remaining: push/open PR to main.
+rocket targets, health bars, white/gold YJSPS).
+Published PR: https://github.com/prathamingale49/fpsgame/pull/6 (unmerged).
+Implementation checkpoint: `331668f`; latest commit is `git log -1`.
+Local server on port 2567 verified: practice=true, six player states, playing.
+No required work remains; await review. PR #5 is separate.
 Final focused repeat and TypeScript pass. The seeded fixture verifies actual
 resumed motion and selects a visible target so legitimate NPC occlusion does
 not make the combat check flaky. Production code matches the full-suite/build
