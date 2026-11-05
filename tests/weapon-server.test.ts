@@ -14,7 +14,7 @@ async function select(r: Room<MatchState>, id: string) { r.send('weapon:select',
 function trigger(r: Room<MatchState>, action: string) { r.send('weapon:trigger', { action, shot: shot(r) }); }
 async function hold(r: Room<MatchState>, ms: number) { trigger(r, 'start'); const timer = setInterval(() => trigger(r, 'aim'), 80); try { await delay(ms); } finally { clearInterval(timer); } }
 beforeAll(async () => {
-  server = spawn(process.execPath, ['--import', 'tsx', 'tests/fixtures/weapon-server.ts'], { env: { ...process.env, PORT: String(port), PCB_TEST_WEAPON_PICKUP_SECONDS: '.3' }, stdio: 'pipe' });
+  server = spawn(process.execPath, ['--import', 'tsx', 'tests/fixtures/weapon-server.ts'], { env: { ...process.env, PORT: String(port), PCB_TEST_WEAPON_PICKUP_SECONDS: '.3', PCB_TEST_DROP_SECONDS: '2' }, stdio: 'pipe' });
   server.stderr?.on('data', chunk => serverLog += String(chunk));
   for (let i = 0; i < 200; i++) { try { if ((await fetch(`http://localhost:${port}/api/health`, { signal: AbortSignal.timeout(500) })).ok) return; } catch {} await delay(100); }
   throw new Error(`Weapon test server failed: ${serverLog}`);
@@ -101,7 +101,7 @@ it('validates multiplayer pickup versions/distance, carries one special, preserv
   await delay(100); expect(p.weapon).toBe('solder'); expect(p.specialWeapon).toBe('');
   const collect = (id: string, version = r.state.weaponPickups.get(id)!.version) => r.send('weapon:collect', { id, version });
   collect('0'); collect('0'); await wait(() => p.specialWeapon === 'iron'); expect(p.weapon).toBe('iron');
-  expect(r.state.weaponPickups.get('0')!.version).toBe(1);
+  expect(r.state.weaponPickups.get('0')!.version).toBe(2);
   r.send('weapon:swap'); await wait(() => p.weapon === 'solder'); expect(p.specialWeapon).toBe('iron');
   r.send('shoot', shot(r)); await wait(() => p.ammo === 29);
   r.send('weapon:swap'); await wait(() => p.weapon === 'iron'); expect(p.ammo).toBe(5);
@@ -114,3 +114,51 @@ it('validates multiplayer pickup versions/distance, carries one special, preserv
   await wait(() => !p.alive); collect('1'); await delay(100); expect(p.specialWeapon).toBe('iron');
   await wait(() => p.alive, 3500); expect(p.weapon).toBe('solder'); expect(p.specialWeapon).toBe('');
 }, 14000);
+it('drops replacement stock once, blocks the owner briefly, lets peers collect, and expires temporary pickups', async () => {
+  const r = await open('pcb'), peer = await new Client(`ws://localhost:${port}`).joinById<MatchState>(r.roomId, { protocol: MOVEMENT_PROTOCOL }); rooms.push(peer); peer.onMessage('*', () => {});
+  await wait(() => r.state.phase === 'playing' && !!peer.state.players?.get(peer.sessionId));
+  const collect = (client: Room<MatchState>, id: string) => client.send('weapon:collect', { id, version: r.state.weaponPickups.get(id)?.version ?? 0 });
+  collect(r, '0'); await wait(() => human(r).weapon === 'iron');
+  trigger(r, 'start'); trigger(r, 'release'); await wait(() => human(r).ammo === 4);
+  collect(r, '1'); collect(r, '1'); await wait(() => human(r).weapon === 'air');
+  const drops = () => [...r.state.weaponPickups.entries()].filter(([, p]) => p.dropped);
+  await wait(() => drops().length === 1); const id = drops()[0][0];
+  collect(r, id); await delay(80); expect(human(r).weapon).toBe('air'); expect(drops()).toHaveLength(1);
+  collect(peer, id); collect(peer, id); await wait(() => human(peer).weapon === 'iron');
+  expect(human(peer).ammo).toBe(4); expect(human(peer).specialWeapon).toBe('iron');
+  await wait(() => !r.state.weaponPickups.has(id));
+  await wait(() => r.state.weaponPickups.get('0')!.active); collect(r, '0'); await wait(() => human(r).weapon === 'iron');
+  await wait(() => drops().length === 1); const expired = drops()[0][0];
+  await wait(() => !r.state.weaponPickups.has(expired), 3000);
+  await delay(400); expect(r.state.weaponPickups.has(expired)).toBe(false);
+}, 10000);
+it('transfers an in-progress capacitor recharge without restarting it or granting ammo', async () => {
+  const r = await open('pcb'), peer = await new Client(`ws://localhost:${port}`).joinById<MatchState>(r.roomId, { protocol: MOVEMENT_PROTOCOL }); rooms.push(peer); peer.onMessage('*', () => {});
+  await wait(() => r.state.phase === 'playing' && !!peer.state.players?.get(peer.sessionId));
+  for (let seq = 1; seq <= 6; seq++) peer.send('input', { seq, forward: 0, strafe: 1, yaw: 0, pitch: 0, jump: false, sprint: false });
+  await wait(() => human(peer).ack === 6);
+  r.send('weapon:collect', { id: '9', version: r.state.weaponPickups.get('9')!.version }); await wait(() => human(r).weapon === 'sniper');
+  r.send('shoot', { ...shot(r), yaw: Math.PI }); await wait(() => human(r).reloading);
+  const deadline = human(r).sniperReloadAt;
+  r.send('weapon:collect', { id: '1', version: r.state.weaponPickups.get('1')!.version }); await wait(() => human(r).weapon === 'air');
+  const drop = [...r.state.weaponPickups.entries()].find(([, p]) => p.dropped && p.weapon === 'sniper')!;
+  peer.send('weapon:collect', { id: drop[0], version: drop[1].version }); await wait(() => human(peer).weapon === 'sniper');
+  expect(human(peer).ammo).toBe(0); expect(human(peer).sniperReloadAt).toBe(deadline);
+  await wait(() => human(peer).ammo === 1 && !human(peer).reloading, 3000);
+}, 7000);
+it('drops a carried special exactly once on an authoritative kill', async () => {
+  const r = await open('pcb'), peer = await new Client(`ws://localhost:${port}`).joinById<MatchState>(r.roomId, { protocol: MOVEMENT_PROTOCOL }); rooms.push(peer); peer.onMessage('*', () => {});
+  await wait(() => r.state.phase === 'playing' && !!peer.state.players?.get(peer.sessionId));
+  peer.send('weapon:collect', { id: '0', version: r.state.weaponPickups.get('0')!.version }); await wait(() => human(peer).weapon === 'iron');
+  for (let seq = 1; seq <= 24; seq++) peer.send('input', { seq, forward: 1, strafe: 0, yaw: 0, pitch: 0, jump: false, sprint: false });
+  await wait(() => human(peer).ack === 24);
+  r.send('weapon:collect', { id: '9', version: r.state.weaponPickups.get('9')!.version }); await wait(() => human(r).weapon === 'sniper');
+  r.send('weapon:ads', true); r.send('shoot', shot(r));
+  await wait(() => !human(peer).alive);
+  const drops = [...r.state.weaponPickups.values()].filter(p => p.dropped);
+  expect(drops).toHaveLength(1); expect(drops[0].weapon).toBe('iron');
+  expect(Math.hypot(drops[0].x - human(peer).x, drops[0].z - human(peer).z)).toBeLessThanOrEqual(1.5);
+  expect(human(peer).specialWeapon).toBe('');
+  peer.send('weapon:collect', { id: '1', version: 0 }); await delay(100);
+  expect([...r.state.weaponPickups.values()].filter(p => p.dropped)).toHaveLength(1);
+}, 7000);

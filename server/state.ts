@@ -20,7 +20,7 @@ export const PlayerState = schema({
 export type PlayerState = SchemaType<typeof PlayerState>;
 export const PickupState = schema({ x: t.float32(), y: t.float32(), z: t.float32(), side: t.string().default('front'), active: t.boolean().default(true) }, 'PickupState');
 export type PickupState = SchemaType<typeof PickupState>;
-export const WeaponPickupState = schema({ x: t.float32(), y: t.float32(), z: t.float32(), side: t.string(), weapon: t.string(), active: t.boolean().default(true), version: t.uint32().default(0) }, 'WeaponPickupState');
+export const WeaponPickupState = schema({ x: t.float32(), y: t.float32(), z: t.float32(), side: t.string(), weapon: t.string(), active: t.boolean().default(true), version: t.uint32().default(0), dropped: t.boolean().default(false) }, 'WeaponPickupState');
 
 export const MatchState = schema({
   players: t.map(PlayerState),

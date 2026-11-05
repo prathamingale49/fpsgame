@@ -1,10 +1,17 @@
 import { expect, it } from 'vitest';
 import { createWeaponModel, animateWeapon, type WeaponAnimation } from '../client/weapon-models.js';
-import { weaponPickupLocations, canCollectWeapon } from '../shared/weapon-pickups.js';
+import { weaponPickupLocations, droppedWeaponPosition, canCollectWeapon } from '../shared/weapon-pickups.js';
 import { WEAPON_IDS, weaponKillMessage } from '../shared/weapons.js';
 import { testMap } from '../shared/game.js';
 import fs from 'node:fs';
 const input: WeaponAnimation = { dt: 1 / 60, active: true, enabled: true, charge: 0, heat: 0, firing: false, overheated: false, reloading: false, moving: false, fireAt: 0 };
+it('finds supported reachable drops and rejects falling/outside/blocked locations', () => {
+  const p = { x: 0, y: testMap.ground, z: 0, side: 'front' }, map = { ...testMap, boxes: [] };
+  expect(droppedWeaponPosition(p, map)).toBeDefined();
+  expect(droppedWeaponPosition({ ...p, y: -100 }, map)).toBeUndefined();
+  expect(droppedWeaponPosition({ ...p, x: 10000 }, map)).toBeUndefined();
+  expect(droppedWeaponPosition(p, { ...map, boxes: [{ min: [-4, 0, -4], max: [4, 10, 4] }] })).toBeUndefined();
+});
 it('builds four distinct reusable models with recognizably different parts', () => {
   const models = WEAPON_IDS.map(createWeaponModel);
   expect(new Set(models.map(m => m.root.name)).size).toBe(5);

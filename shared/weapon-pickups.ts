@@ -3,6 +3,22 @@ import { validWeaponId } from './weapons.js';
 export const WEAPON_PICKUPS = { radius: 1.5, respawnSeconds: 15 } as const;
 export type WeaponPickup = { x: number; y: number; z: number; side: string; weapon: string; active: boolean; version: number };
 type Point = { x: number; y: number; z: number; side: BoardSide };
+// Conservative local placement: supported floor/component tops, capsule and
+// rotating-model clearance, and a clear collection path from the owner.
+export function droppedWeaponPosition(player: { x: number; y: number; z: number; side: string }, map: MapData): Point | undefined {
+  if (![player.x, player.y, player.z].every(Number.isFinite) || player.y < map.ground - .1 || Math.abs(player.x) > map.width / 2 || Math.abs(player.z) > map.depth / 2) return;
+  const side = player.side as BoardSide;
+  if (side !== 'front' && !(side === 'back' && map.back?.enabled)) return;
+  const boxes = surfaceMap(map, side).boxes;
+  for (const radius of [.6, 1, 1.4, 0]) for (let i = 0; i < 16; i++) {
+    const x = player.x + Math.cos(i * Math.PI / 8) * radius, z = player.z + Math.sin(i * Math.PI / 8) * radius;
+    if (Math.abs(x) > map.width / 2 - .9 || Math.abs(z) > map.depth / 2 - .9) continue;
+    const y = Math.max(map.ground, ...boxes.filter(b => x >= b.min[0] && x <= b.max[0] && z >= b.min[2] && z <= b.max[2] && b.max[1] <= player.y + .1).map(b => b.max[1]));
+    if (Math.abs(y - player.y) > .75 || boxes.some(b => b.max[1] > y + .01 && b.min[1] < y + PLAYER.height && x + .9 > b.min[0] && x - .9 < b.max[0] && z + .9 > b.min[2] && z - .9 < b.max[2])) continue;
+    const point = { x, y, z, side };
+    if (canCollectWeapon({ x: player.x, y: player.y, z: player.z, side: player.side, alive: true }, { ...point, weapon: 'iron', active: true, version: 0 }, map)) return point;
+  }
+}
 export function weaponPickupLocations(map: MapData, seed = Math.floor(Math.random() * 0xffffffff)): Point[] {
   const regions: Partial<Record<BoardSide, Point[]>> = {};
   for (const side of (map.back?.enabled ? ['front', 'back'] : ['front']) as BoardSide[]) {
