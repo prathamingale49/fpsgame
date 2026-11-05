@@ -25,7 +25,6 @@ export class GameRoom extends Room {
   }
   private cancelWeapon(id: string) { const p = this.state.players.get(id); if (p) { p.chargeStarted = 0; p.triggerHeld = false; } const c = this.weapons.get(id); if (c) { c.held = false; c.shot = undefined; } }
   practice: boolean = false;
-  pickupPractice: boolean = false;
   private weaponRespawns = new Map<string, number>();
   private bots = new Map<string, { mode: number; next: number; yaw: number; moving: boolean; sprint: boolean }>();
   maxClients = 8;
@@ -44,8 +43,8 @@ export class GameRoom extends Room {
 
   onCreate() {
     this.state.practice = this.practice;
-    this.state.pickupPractice = this.pickupPractice;
-    if (this.pickupPractice) weaponPickupLocations(activeMap, Math.floor(Math.random() * 0xffffffff)).forEach((point, index) => this.state.weaponPickups.set(String(index), new WeaponPickupState({ ...point, weapon: (['iron', 'air', 'pump'] as const)[index % 3] })));
+
+    if (!this.practice) weaponPickupLocations(activeMap, Math.floor(Math.random() * 0xffffffff)).forEach((point, index) => this.state.weaponPickups.set(String(index), new WeaponPickupState({ ...point, weapon: (['iron', 'air', 'pump'] as const)[index % 3] })));
     if (this.practice) { this.maxClients = 1; void this.setPrivate(true); }
     this.onMessage('practice:movement', () => { if (this.practice) this.state.npcMovement = !this.state.npcMovement; });
     this.roomId = Math.random().toString(36).slice(2, 8).toUpperCase();
@@ -76,15 +75,14 @@ export class GameRoom extends Room {
     this.onMessage('weapon:select', (client, value: unknown) => {
       const p = this.state.players.get(client.sessionId), r = this.runtime.get(client.sessionId);
       if (!this.practice || !p?.alive || p.npc || !r || !validWeaponId(value) || value === p.weapon) return;
-      if (this.pickupPractice && value !== 'solder' && value !== p.specialWeapon) return;
       this.equipWeapon(client.sessionId, value);
     });
     this.onMessage('weapon:swap', client => {
       const p = this.state.players.get(client.sessionId);
-      if (this.pickupPractice && p?.alive && p.specialWeapon) this.equipWeapon(client.sessionId, (p.weapon === 'solder' ? p.specialWeapon : 'solder') as WeaponId);
+      if (!this.practice && p?.alive && p.specialWeapon) this.equipWeapon(client.sessionId, (p.weapon === 'solder' ? p.specialWeapon : 'solder') as WeaponId);
     });
     this.onMessage('weapon:collect', (client, value: unknown) => {
-      if (!this.pickupPractice || !value || typeof value !== 'object') return;
+      if (this.practice || !value || typeof value !== 'object') return;
       const request = value as { id?: unknown; version?: unknown }, p = this.state.players.get(client.sessionId);
       if (typeof request.id !== 'string' || !Number.isSafeInteger(request.version) || !p || p.npc || p.transitionCooldown > 0) return;
       const pickup = this.state.weaponPickups.get(request.id);
@@ -99,7 +97,7 @@ export class GameRoom extends Room {
       this.broadcast('feed', { text: `${p.name} collected ${WEAPONS[pickup.weapon as WeaponId].name}` });
     });
     this.onMessage('weapon:trigger', (client, value: unknown) => {
-      if (!this.practice || !value || typeof value !== 'object') return;
+      if (!value || typeof value !== 'object') return;
       const action = (value as { action?: unknown }).action, shot = (value as { shot?: unknown }).shot;
       const p = this.state.players.get(client.sessionId);
       if (!p || p.npc) return;
@@ -177,6 +175,9 @@ export class GameRoom extends Room {
   private startMatch() {
     this.killChain.clear();
     this.hitHistory.clear();
+    this.weapons.clear();
+    this.state.weaponPickups.forEach(pickup => { pickup.active = true; });
+    this.weaponRespawns.clear();
     this.elapsed = 0; this.state.seconds = this.matchSeconds; this.state.winner = ''; this.state.phase = 'playing';
     this.state.players.forEach((p) => {
       if (Math.abs(p.x) >= activeMap.width / 2 || Math.abs(p.z) >= activeMap.depth / 2 || p.y < activeMap.ground - 1) {
@@ -185,6 +186,7 @@ export class GameRoom extends Room {
         p.side = 'front'; p.transitionCooldown = 0; p.flipCooldown = 0; p.headingOffset = 0;
       }
       p.jumpHeld = false; p.mantleTarget = 0;
+      p.weapon = 'solder'; p.specialWeapon = ''; p.heat = 0; p.overheated = false; p.triggerHeld = false; p.chargeStarted = 0; p.weaponReadyAt = 0;
       p.kills = 0; p.deaths = 0; p.hp = 100; p.alive = true; p.ammo = WEAPON.magazine; p.reserve = WEAPON.reserve; p.reloading = false;
     });
     this.runtime.forEach((r, id) => { r.queue.clear(); r.credit = 0; r.lastSeq = r.lastReceived; r.lastShot = -Infinity; r.lastShotId = -1; r.reloadAt = 0; const p = this.state.players.get(id); if (p) p.ack = r.lastSeq; });
@@ -214,7 +216,7 @@ export class GameRoom extends Room {
     }
     this.state.players.forEach((p, id) => {
       const r = this.runtime.get(id); if (!r) return;
-      if (this.practice && !p.npc) {
+      if (!p.npc) {
         const c = this.weaponControl(id);
         if (c.held && (now - c.lease > HEAT.lease || !p.alive || !p.connected || p.reloading || p.transitionCooldown > 0)) this.cancelWeapon(id);
         if (!c.held || p.weapon !== 'air' || p.overheated) p.heat = Math.max(0, p.heat - (now - c.heatAt) / HEAT.cooling);
@@ -310,12 +312,12 @@ export class GameRoom extends Room {
     const shot: ShotInput | undefined = payload === undefined || payload === null ? undefined : payload as ShotInput;
     if (!p || p.npc || !r || !p.alive || !p.connected || this.state.phase !== 'playing' || p.reloading || p.transitionCooldown > 0) return;
     const config = WEAPONS[p.weapon as WeaponId];
-    if ((!this.practice && p.weapon !== 'solder') || (p.weapon === 'iron' && charge === undefined) || (p.weapon === 'air' && !heatPulse)) return;
-    if (now - r.lastShot < config.fireInterval || (this.practice && now < p.weaponReadyAt)) return;
+    if ((p.weapon === 'iron' && charge === undefined) || (p.weapon === 'air' && !heatPulse)) return;
+    if (now - r.lastShot < config.fireInterval || now < p.weaponReadyAt) return;
     if (shot && ((!heatPulse && shot.shotId <= r.lastShotId) || shot.seq > r.lastReceived + 1 || shot.seq < r.lastSeq - 120)) return;
     if (p.weapon !== 'air' && p.ammo <= 0) { this.reload(id); return; }
     if (shot) r.lastShotId = shot.shotId;
-    r.lastShot = now; if (this.practice) p.weaponReadyAt = now + config.fireInterval;
+    r.lastShot = now; p.weaponReadyAt = now + config.fireInterval;
     if (p.weapon === 'air') { p.heat = Math.min(1, p.heat + HEAT.pulse / HEAT.duration); if (p.heat >= .999) p.overheated = true; }
     else p.ammo--;
     const ray = aimRay(p.x, p.y, p.z, movementYaw(shot?.yaw ?? p.yaw, p as unknown as Motion), shot?.pitch ?? p.pitch, this.playerTuning);
@@ -403,11 +405,10 @@ export class GameRoom extends Room {
     const c = this.weaponControl(id); c.stocks.set(p.weapon as WeaponId, { ammo: p.ammo, reserve: p.reserve });
     this.cancelWeapon(id); p.reloading = false; r.reloadAt = 0;
     const config = WEAPONS[value], stock = c.stocks.get(value) ?? { ammo: config.magazine, reserve: config.reserve };
-    p.weapon = value; if (!this.pickupPractice) p.specialWeapon = value === 'solder' ? '' : value;
+    p.weapon = value; if (this.practice) p.specialWeapon = value === 'solder' ? '' : value;
     p.ammo = stock.ammo; p.reserve = stock.reserve; p.weaponReadyAt = Math.max(p.weaponReadyAt, r.lastShot + config.fireInterval);
   }
   onDispose() { this.weaponRespawns.clear(); this.weapons.clear(); this.bots.clear(); this.runtime.clear(); this.hitHistory.clear(); }
 }
 
 export class PracticeRoom extends GameRoom { practice = true; }
-export class PickupPracticeRoom extends PracticeRoom { pickupPractice = true; }
