@@ -227,6 +227,12 @@ function buildMap(data: MapData) {
     addBackFallback();
   } else {
     new GLTFLoader().load(map.model, gltf => {
+      // The importer emits the substrate as the first material group.
+      const substrate = gltf.scene.children[0];
+      if (data.boardColor && substrate instanceof THREE.Mesh) {
+        const materials = Array.isArray(substrate.material) ? substrate.material : [substrate.material];
+        for (const material of materials) if (material instanceof THREE.MeshStandardMaterial) material.color.set(data.boardColor);
+      }
       gltf.scene.traverse(object => {
         if (!(object instanceof THREE.Mesh)) return;
         const materials = Array.isArray(object.material) ? object.material : [object.material];

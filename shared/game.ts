@@ -36,7 +36,7 @@ export type Box = { min: [number, number, number]; max: [number, number, number]
 export type Spawn = [number, number, number];
 export type BoardSide = 'front' | 'back';
 export type BoardBack = { boxes: Box[]; thickness: number; enabled: boolean };
-export type MapData = { id: string; title: string; width: number; depth: number; ground: number; surface?: number[]; backTexture?: string; boxes: Box[]; spawns: Spawn[]; back?: BoardBack; model?: string; texture?: string; components?: { ref: string; x: number; z: number; rotation: number; layer: string }[] };
+export type MapData = { id: string; title: string; width: number; depth: number; ground: number; surface?: number[]; backTexture?: string; boardColor?: string; boxes: Box[]; spawns: Spawn[]; back?: BoardBack; model?: string; texture?: string; components?: { ref: string; x: number; z: number; rotation: number; layer: string }[] };
 // Triangulated STEP substrate top, including its outline and cutouts.
 export function onBoard(map: MapData, x: number, z: number, side: BoardSide = 'front'): boolean {
   if (side === 'back') z = -z;

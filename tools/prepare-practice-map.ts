@@ -46,10 +46,11 @@ function artwork(source: string, output: string) {
   }
   const cropped = new PNG({ width: x1-x0+1, height: y1-y0+1 });
   PNG.bitblt(png, cropped, x0, y0, cropped.width, cropped.height, 0, 0);
-  fs.writeFileSync(output, PNG.sync.write(cropped)); recolorTop(output, output);
+  fs.writeFileSync(output, PNG.sync.write(cropped)); recolorTop(output, output, id === 'flight-sam' ? 'blue' : id === 'recovery' ? 'black' : 'green');
   console.log(`${output}: crop ${x0},${y0}–${x1},${y1}`);
 }
 artwork(top, `${root}-top.png`); artwork(bottom, `${root}-bottom.png`);
+map.boardColor = id === 'flight-sam' ? '#101b78' : '#101218';
 map.backTexture = `/maps/${id}-bottom.png`;
 map.title = PRACTICE_MAPS.find(map => map.id === id)?.title ?? id;
 map.back!.enabled = true;

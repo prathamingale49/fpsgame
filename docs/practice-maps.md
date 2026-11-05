@@ -25,7 +25,7 @@ Game units remain millimeters. Front coordinates are `(STEP X - center X, STEP Z
 
 The existing importer merges solids by material into a small number of meshes. Its existing oversized-envelope policy retains four Flight SAM solids as faint transparent geometry; no Recovery solids were classified as envelopes. Header extraction and underside protrusion processing use the same rules as BMS.
 
-The preparation stage extracts the actual substrate top triangles from the GLB, including mounting holes and the Flight SAM cutout. These triangles define both the floor and artwork geometry. Viewport margins are cropped from the Altium exports; the existing solder-mask recoloring is applied to both sides. Bottom UVs reverse physical X to match the supplied bottom view. The rectangular prototype substrate and border are omitted for maps with a CAD surface.
+The preparation stage extracts the actual substrate top triangles from the GLB, including mounting holes and the Flight SAM cutout. These triangles define both the floor and artwork geometry. Viewport margins are cropped from the Altium exports; map-specific solder-mask recoloring is applied to both sides: blue for Flight SAM and black for Recovery, with yellow markings. CAD substrate edges use the same board color. Bottom UVs reverse physical X to match the supplied bottom view. The rectangular prototype substrate and border are omitted for maps with a CAD surface.
 
 ## Collision and spawns
 
@@ -41,6 +41,6 @@ Eight front spawns are selected from the largest connected region of a 2 mm grid
 - Full suite: 119 tests pass in 15 files. The subsequently added concurrent-map isolation test also passes; targeted map tests pass 4/4.
 - Practice browser check passes for all three maps: model loading, matching client/server map IDs, all five weapon slots, F5 hitboxes, F6 freeze/resume, returning to the menu, switching boards, and then creating a BMS public room. No browser page errors.
 - Recovery and Flight SAM each pass all four outer-edge round trips with actual CAD geometry, correct side labels and camera/world orientation, synchronized side changes on a second client, and no browser page errors. Recovery's south return lands on an 8.83 mm component.
-- Captured front/back browser renders were inspected and saved under `docs/screenshots/practice-maps`.
+- Initial front/back geometry verification renders were inspected and saved under `docs/screenshots/practice-maps` (captured before the subsequent blue/black mask color update). The color update regenerates all four textures and the substrate edge colors; its production build passes.
 
 The first Flight SAM traversal run with SwiftShader completed its north round trip but could not collect the test's minimum eight animation samples; all four edges passed when rerun using hardware rendering. Automated checks do not replace extended human playtesting of every component, weapon angle, or possible route. Interior cutout edges use falling/respawn rather than a new flip animation; outer-edge flips retain the existing behavior.
