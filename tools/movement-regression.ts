@@ -58,7 +58,7 @@ try {
   await a.locator('#create').click(); await a.locator('#hud:not(.hidden)').waitFor({ timeout: 30000 });
   const code = (await a.locator('#room-label').textContent())?.match(/ROOM ([A-Z0-9]+)/)?.[1];
   if (!code) throw new Error('Room code missing');
-  await b.locator('#code').fill(code); await b.locator('#join').click();
+  await b.locator('.join-details summary').click(); await b.locator('#code').fill(code); await b.locator('#join').click();
   await b.locator('#hud:not(.hidden)').waitFor({ timeout: 30000 });
   await Promise.all([a.locator('#game[data-model-loaded="true"]').waitFor({ timeout: 60000 }), b.locator('#game[data-model-loaded="true"]').waitFor({ timeout: 60000 })]);
   if (await a.evaluate(() => document.pointerLockElement?.id !== 'game')) await a.locator('#pause').click();

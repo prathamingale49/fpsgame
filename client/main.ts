@@ -1,7 +1,8 @@
 import * as THREE from 'three';
+import { PRACTICE_MAPS } from '../shared/maps';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 import { Client, type Room } from '@colyseus/sdk';
-import { aimRay, collisionCacheStats, movementYaw, samplePosition, hitscan, COMBAT, DEV_SCALE, EDGE_FLIP_SECONDS, FLIP_COOLDOWN_SECONDS, JUMP_HEIGHT_RATIO, PLAYER, initialMotion, MOVEMENT_PROTOCOL, stepMotion, testMap, TICK, WEAPON, tuningForHeight, type Input, type MapData, type Motion, type BoardSide, type PositionSample, type ShotInput } from '../shared/game';
+import { nearestFlipEdge, aimRay, collisionCacheStats, movementYaw, samplePosition, hitscan, COMBAT, DEV_SCALE, EDGE_FLIP_SECONDS, FLIP_COOLDOWN_SECONDS, JUMP_HEIGHT_RATIO, PLAYER, initialMotion, MOVEMENT_PROTOCOL, stepMotion, testMap, TICK, WEAPON, tuningForHeight, type Input, type MapData, type Motion, type BoardSide, type PositionSample, type ShotInput } from '../shared/game';
 import type { MatchState, PlayerState } from '../server/state';
 import './style.css';
 import { WEAPONS, WEAPON_IDS, CHARGE, HEAT, type WeaponId } from '../shared/weapons';
@@ -13,9 +14,32 @@ import { mergeDamageNumber, damageNumberVisible, type DamageFeedback, type Damag
 const el = <T extends HTMLElement>(id: string) => document.getElementById(id) as T;
 document.title = 'YJSPS · YJSP';
 for (const brand of Array.from(document.querySelectorAll('.brand, .menu-card h1'))) brand.innerHTML = 'YJS<span>PS</span>';
-const practiceButton = document.createElement('button'); practiceButton.id = 'practice'; practiceButton.textContent = 'SOLO PRACTICE';
-el('create').parentElement!.after(practiceButton);
-practiceButton.style.cssText = 'width:100%;margin-top:8px;padding:15px;background:#323332;color:#e0a500;border:1px solid #e0a500;font-weight:700;cursor:pointer';
+const practiceButton = el<HTMLButtonElement>('practice');
+let selectedPracticeMap = 'bms';
+let switchingMap = false;
+const mapsButton = document.createElement('button'); mapsButton.id = 'maps-toggle'; mapsButton.textContent = 'MAPS'; mapsButton.hidden = true;
+mapsButton.setAttribute('aria-expanded', 'false'); mapsButton.setAttribute('aria-controls', 'maps-sidebar');
+const mapsSidebar = document.createElement('aside'); mapsSidebar.id = 'maps-sidebar'; mapsSidebar.hidden = true;
+mapsSidebar.innerHTML = '<header><strong>PRACTICE MAPS</strong><button id="maps-close" aria-label="Close maps">×</button></header><p>Choose a board. Targets reset when switching.</p><div id="map-options"></div><small>M · MAPS / ESC · CLOSE</small>';
+el('hud').append(mapsButton, mapsSidebar);
+for (const { id, title } of PRACTICE_MAPS) {
+  const button = document.createElement('button'); button.dataset.mapId = id; button.textContent = title;
+  button.onclick = () => { void switchPracticeMap(id); }; el('map-options').append(button);
+}
+function toggleMaps(open: boolean) {
+  mapsSidebar.hidden = !open; mapsButton.setAttribute('aria-expanded', String(open));
+  if (open) { document.exitPointerLock(); keys.clear(); mouseDown = false; cancelSpecial(); el('pause').classList.add('hidden'); }
+}
+mapsButton.onclick = () => toggleMaps(mapsSidebar.hidden);
+el('maps-close').onclick = () => toggleMaps(false);
+async function switchPracticeMap(id: string) {
+  if (!room?.state.practice || switchingMap) return;
+  if (map.id === id) { toggleMaps(false); return; }
+  switchingMap = true; selectedPracticeMap = id;
+  for (const button of Array.from(mapsSidebar.querySelectorAll('button'))) button.disabled = true;
+  try { document.exitPointerLock(); await room.leave(); clearSessionVisuals(); await connect('practice'); }
+  finally { switchingMap = false; for (const button of Array.from(mapsSidebar.querySelectorAll('button'))) button.disabled = false; }
+}
 const pickupPrompt = document.createElement('div'); pickupPrompt.id = 'pickup-prompt'; pickupPrompt.style.cssText = 'position:absolute;bottom:190px;width:100%;text-align:center;font:13px monospace;color:#ffcf4a;pointer-events:none'; el('hud').append(pickupPrompt);
 const weaponPickupModels = new Map<string, THREE.Group>();
 let nearbyWeapon: { id: string; version: number } | null = null, visualFireAt = 0;
@@ -134,13 +158,25 @@ const playCorrections: number[] = [];
 const gl = renderer.getContext(), debugRenderer = gl.getExtension('WEBGL_debug_renderer_info');
 const gpu = debugRenderer ? String(gl.getParameter(debugRenderer.UNMASKED_RENDERER_WEBGL)) : String(gl.getParameter(gl.RENDERER));
 let maxPending = 0, maxCorrection = 0;
+function sceneResources() {
+  const geometries = new Set<THREE.BufferGeometry>(), materials = new Set<THREE.Material>();
+  let objects = 0;
+  scene.traverse(object => {
+    objects++;
+    if (object instanceof THREE.Mesh || object instanceof THREE.Line) {
+      geometries.add(object.geometry);
+      for (const material of Array.isArray(object.material) ? object.material : [object.material]) materials.add(material);
+    }
+  });
+  return { objects, geometries: geometries.size, materials: materials.size };
+}
 (window as unknown as { __pcbPerf: () => unknown }).__pcbPerf = () => ({
   frameTimes: [...frameTimes], playCorrections: [...playCorrections], pending: pending.length, maxPending, correction, maxCorrection,
   renderer: { geometries: renderer.info.memory.geometries, textures: renderer.info.memory.textures, calls: renderer.info.render.calls, triangles: renderer.info.render.triangles },
-  gpu,
+  scene: sceneResources(), gpu, mapId: map.id, authoritativeMapId: room?.state.mapId,
   cache: collisionCacheStats(map), heapMB: ((performance as Performance & { memory?: { usedJSHeapSize: number } }).memory?.usedJSHeapSize ?? 0) / 1048576,
-  position: [local.x, local.y, local.z], authoritative: room?.state.players.get(room.sessionId) ? [room.state.players.get(room.sessionId)!.x, room.state.players.get(room.sessionId)!.y, room.state.players.get(room.sessionId)!.z] : null,
-  side: local.side ?? 'front', authoritativeSide: room?.state.players.get(room.sessionId)?.side,
+  position: [local.x, local.y, local.z], authoritative: room?.state?.players?.get(room.sessionId) ? [room.state.players!.get(room.sessionId)!.x, room.state.players!.get(room.sessionId)!.y, room.state.players!.get(room.sessionId)!.z] : null,
+  side: local.side ?? 'front', authoritativeSide: room?.state?.players?.get(room.sessionId)?.side,
   testRemaining: testMove?.remaining ?? 0,
   cameraRoll: camera.rotation.z, worldRotation: world.rotation.x,
   flipCooldown: local.flipCooldown ?? 0, orbitProgress: boardFlip?.progress ?? null, cameraPosition: camera.position.toArray(), cameraQuaternion: camera.quaternion.toArray(),
@@ -154,7 +190,32 @@ function boxMesh(box: { min: number[]; max: number[]; name?: string }, mat: THRE
   mesh.position.set((box.min[0] + box.max[0]) / 2, (box.min[1] + box.max[1]) / 2, (box.min[2] + box.max[2]) / 2);
   mesh.castShadow = false; mesh.receiveShadow = true; return mesh;
 }
+function clearSessionVisuals() {
+  snapshot = null; pending = []; keys.clear(); mouseDown = false; boardFlip = null;
+  for (const entry of remotes.values()) {
+    scene.remove(entry.mesh, entry.healthBar);
+    entry.mesh.traverse(obj => { if (obj instanceof THREE.Mesh) obj.geometry.dispose(); });
+    entry.healthBar.traverse(obj => { if (obj instanceof THREE.Mesh) { obj.geometry.dispose(); (obj.material as THREE.Material).dispose(); } });
+  }
+  remotes.clear();
+  for (const helper of npcHitboxes.values()) { scene.remove(helper); helper.dispose(); } npcHitboxes.clear();
+  for (const mesh of spoolMeshes.values()) { scene.remove(mesh); mesh.traverse(obj => { if (obj instanceof THREE.Mesh) { obj.geometry.dispose(); if (obj.material !== dark) (obj.material as THREE.Material).dispose(); } }); } spoolMeshes.clear();
+  for (const mesh of weaponPickupModels.values()) { scene.remove(mesh); disposeWeaponModel(mesh.userData.weaponModel); mesh.traverse(obj => { if (obj instanceof THREE.Mesh && obj.geometry.type === 'CircleGeometry') { obj.geometry.dispose(); (obj.material as THREE.Material).dispose(); } }); } weaponPickupModels.clear();
+  for (const shot of shots) { scene.remove(shot.line); shot.line.geometry.dispose(); (shot.line.material as THREE.Material).dispose(); } shots.length = 0; predictedTracers.clear();
+  for (const number of damageNumbers) number.element.remove(); damageNumbers.length = 0;
+  airCone.visible = false; showNpcHitboxes = false; specialHeld = false; adsHeld = false; fullChargeCue = false;
+  el('kill-feed').replaceChildren(); el('hitmarker').classList.add('hidden'); el('damage-flash').style.opacity = '0';
+}
 function buildMap(data: MapData) {
+  world.traverse(object => {
+    if (!(object instanceof THREE.Mesh)) return;
+    object.geometry.dispose();
+    const materials = Array.isArray(object.material) ? object.material : [object.material];
+    for (const material of materials) if (![boardMat, copper, dark, pale, red].includes(material)) {
+      if ('map' in material) (material.map as THREE.Texture | null)?.dispose();
+      material.dispose();
+    }
+  });
   world.clear(); map = data;
   const addBackFallback = () => {
     if (!map.back?.enabled) return;
@@ -164,16 +225,37 @@ function buildMap(data: MapData) {
   };
   canvas.dataset.modelLoaded = map.model ? 'false' : 'true';
   const board = new THREE.Mesh(new THREE.BoxGeometry(map.width, .45, map.depth), boardMat);
-  board.position.y = map.ground - .225; world.add(board);
-  if (map.texture) {
-    new THREE.TextureLoader().load(map.texture, texture => {
+  board.position.y = map.ground - .225; if (!map.surface) world.add(board);
+  if (map.surface) {
+    const data = map;
+    for (const back of [false, true]) {
+      const url = back ? data.backTexture : data.texture; if (!url) continue;
+      new THREE.TextureLoader().load(url, texture => {
+        if (map !== data) { texture.dispose(); return; }
+        texture.colorSpace = THREE.SRGBColorSpace;
+        texture.anisotropy = Math.min(4, renderer.capabilities.getMaxAnisotropy());
+        const positions: number[] = [], uv: number[] = [];
+        const t = data.surface!;
+        for (let i = 0; i < t.length; i += 6) for (const j of back ? [0, 2, 4] : [4, 2, 0]) {
+          const x = t[i+j], z = t[i+j+1];
+          positions.push(x, back ? -data.back!.thickness - .018 : .018, z);
+          uv.push(back ? .5-x/data.width : .5+x/data.width, .5-z/data.depth);
+        }
+        const geo = new THREE.BufferGeometry(); geo.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3)); geo.setAttribute('uv', new THREE.Float32BufferAttribute(uv, 2));
+        world.add(new THREE.Mesh(geo, new THREE.MeshBasicMaterial({ map: texture, side: THREE.DoubleSide })));
+      });
+    }
+  }
+  if (map.texture && !map.surface) {
+    new THREE.TextureLoader().load(data.texture!, texture => {
+      if (map !== data) { texture.dispose(); return; }
       texture.colorSpace = THREE.SRGBColorSpace;
       texture.anisotropy = Math.min(4, renderer.capabilities.getMaxAnisotropy());
       const art = new THREE.Mesh(new THREE.PlaneGeometry(map.width, map.depth), new THREE.MeshBasicMaterial({ map: texture, polygonOffset: true, polygonOffsetFactor: -2 }));
       art.rotation.x = -Math.PI / 2; art.position.y = map.ground + .018; world.add(art);
     });
   }
-  const edge = new THREE.Mesh(new THREE.BoxGeometry(map.width + 2, .6, map.depth + 2), dark); edge.position.y = map.ground - .75; world.add(edge);
+  const edge = new THREE.Mesh(new THREE.BoxGeometry(map.width + 2, .6, map.depth + 2), dark); edge.position.y = map.ground - .75; if (!map.surface) world.add(edge);
   // Procedural pads and traces keep the prototype readable before artwork is supplied.
   if (!map.model) {
     const padGeo = new THREE.CylinderGeometry(.25, .25, .015, 12);
@@ -190,13 +272,20 @@ function buildMap(data: MapData) {
     addBackFallback();
   } else {
     new GLTFLoader().load(map.model, gltf => {
+      // The importer emits the substrate as the first material group.
+      const substrate = gltf.scene.children[0];
+      if (data.boardColor && substrate instanceof THREE.Mesh) {
+        const materials = Array.isArray(substrate.material) ? substrate.material : [substrate.material];
+        for (const material of materials) if (material instanceof THREE.MeshStandardMaterial) material.color.set(data.boardColor);
+      }
       gltf.scene.traverse(object => {
         if (!(object instanceof THREE.Mesh)) return;
         const materials = Array.isArray(object.material) ? object.material : [object.material];
         for (const material of materials) if (material.transparent && material.opacity < .5) { material.opacity = .035; material.depthWrite = false; }
       });
+      if (map !== data) { gltf.scene.traverse(obj => { if (obj instanceof THREE.Mesh) { obj.geometry.dispose(); for (const material of Array.isArray(obj.material) ? obj.material : [obj.material]) material.dispose(); } }); return; }
       world.add(gltf.scene); canvas.dataset.modelLoaded = 'true';
-    }, undefined, error => { console.error('PCB model load failed', error); canvas.dataset.modelLoaded = 'error'; map.boxes.forEach(box => world.add(boxMesh(box, dark))); addBackFallback(); });
+    }, undefined, error => { if (map !== data) return; console.error('PCB model load failed', error); canvas.dataset.modelLoaded = 'error'; map.boxes.forEach(box => world.add(boxMesh(box, dark))); addBackFallback(); });
   }
 }
 buildMap(map);
@@ -430,12 +519,15 @@ async function connect(mode: 'play' | 'create' | 'join' | 'reconnect' | 'practic
     if (health.movementProtocol !== MOVEMENT_PROTOCOL) throw new Error('Game server version differs from this page. Restart the server and refresh.');
     devScaleEnabled = health.devScaleEnabled === true;
     const token = sessionStorage.getItem('pcb-reconnection-token');
-    const options = { name, protocol: MOVEMENT_PROTOCOL };
+    const options = { name, private: mode === 'create', protocol: MOVEMENT_PROTOCOL, ...(mode === 'practice' ? { mapId: selectedPracticeMap } : {}) };
     room = mode === 'practice' ? await client.create<MatchState>('practice', options) : mode === 'reconnect' && token ? await client.reconnect<MatchState>(token) : mode === 'join' ? await client.joinById<MatchState>(code, options) : mode === 'create' ? await client.create<MatchState>('pcb', options) : await client.joinOrCreate<MatchState>('pcb', options);
+    if (!room.state?.players?.has(room.sessionId)) await new Promise<void>(resolve => room!.onStateChange.once(() => resolve()));
     const me = room.state?.players?.get(room.sessionId);
     pending = []; lastSentInput = null; nextInputAt = performance.now(); seq = me?.ack ?? 0; yaw = me?.yaw ?? 0; pitch = me?.pitch ?? 0;
-    const response = await fetch('/api/map');
-    if (response.ok) buildMap(await response.json() as MapData);
+    const response = await fetch(`/api/map?mapId=${encodeURIComponent(room.state.mapId)}`);
+    if (!response.ok) throw new Error('Could not load the room map.');
+    buildMap(await response.json() as MapData);
+    el('kill-feed').replaceChildren();
     el('map-name').textContent = map.title.toUpperCase();
     el('room-label').textContent = `ROOM ${room.roomId} · COPY LINK`;
     el('room-label').style.pointerEvents = 'auto'; el('room-label').style.cursor = 'pointer';
@@ -468,20 +560,25 @@ async function connect(mode: 'play' | 'create' | 'join' | 'reconnect' | 'practic
     room.onMessage('pickup', (msg: { player: string; amount: number }) => { if (msg.player === room?.sessionId) { showFeed(`+${msg.amount} solder rounds`); sound(710, .16, 'sine'); } });
     room.onDrop(() => { recordMovement('drop', me?.ack ?? 0); mouseDown = false; pending = []; lastSentInput = null; showFeed('Connection lost · reconnecting'); });
     room.onReconnect(() => { const ack = room!.state.players.get(room!.sessionId)?.ack ?? seq; recordMovement('reconnect', ack); pending = []; lastSentInput = null; seq = ack; serverClockOffsetMs = NaN; sessionStorage.setItem('pcb-reconnection-token', room!.reconnectionToken); syncState(room!.state); showFeed('Connection restored'); });
-    room.onLeave(() => { clearElimination(); sessionStorage.removeItem('pcb-reconnection-token'); room = null; scalePanel.hidden = true; el('menu').classList.remove('hidden'); el('hud').classList.add('hidden'); document.exitPointerLock(); showFeed('Disconnected from room'); });
+    const joinedRoom = room;
+    room.onLeave(() => { if (room !== joinedRoom) return; toggleMaps(false); mapsButton.hidden = true; clearSessionVisuals(); clearElimination(); sessionStorage.removeItem('pcb-reconnection-token'); room = null; scalePanel.hidden = true; el('menu').classList.remove('hidden'); el('hud').classList.add('hidden'); document.exitPointerLock(); showFeed('Disconnected from room'); });
     sessionStorage.setItem('pcb-reconnection-token', room.reconnectionToken);
     if (room.state?.players) syncState(room.state);
     clearElimination();
     visualSide = local.side ?? 'front'; boardFlip = null; renderedHeading = local.headingOffset ?? 0;
+    toggleMaps(false); mapsButton.hidden = !room.state.practice;
+    for (const button of Array.from(el('map-options').querySelectorAll('button'))) button.setAttribute('aria-pressed', String(button.dataset.mapId === map.id));
     el('menu').classList.add('hidden'); el('hud').classList.remove('hidden');
     if (devScaleEnabled) showFeed('DEV SCALE enabled · press F4 to adjust height');
     if (mode === 'reconnect') el('pause').classList.remove('hidden'); else void canvas.requestPointerLock();
   } catch (error) { if (mode === 'reconnect') sessionStorage.removeItem('pcb-reconnection-token'); el('error').textContent = error instanceof Error ? error.message : String(error); }
 }
 el('play').onclick = () => connect('play'); el('create').onclick = () => connect('create'); el('join').onclick = () => connect('join');
-practiceButton.onclick = () => connect('practice');
+practiceButton.onclick = () => { selectedPracticeMap = 'bms'; void connect('practice'); };
 document.addEventListener('keydown', e => {
   if (!room?.state.practice || e.repeat) return;
+  if (e.code === 'KeyM') { e.preventDefault(); toggleMaps(mapsSidebar.hidden); }
+  if (e.code === 'Escape' && !mapsSidebar.hidden) toggleMaps(false);
   if (e.code === 'F5') { e.preventDefault(); showNpcHitboxes = !showNpcHitboxes; showFeed(`NPC HITBOXES ${showNpcHitboxes ? 'ON' : 'OFF'}`); }
   if (e.code === 'F6') { e.preventDefault(); room.send('practice:movement'); }
 });
@@ -517,7 +614,7 @@ document.addEventListener('mouseup', e => {
   if (specialHeld && currentWeapon().id === 'iron') { room?.send('weapon:trigger', { action: 'release', shot: weaponShot() }); specialHeld = false; fullChargeCue = false; gunView.position.z = -.15; sound(130, .12); }
   else cancelSpecial();
 });
-document.addEventListener('pointerlockchange', () => { el('pause').classList.toggle('hidden', !room || document.pointerLockElement === canvas); keys.clear(); mouseDown = false; });
+document.addEventListener('pointerlockchange', () => { el('pause').classList.toggle('hidden', !room || !mapsSidebar.hidden || document.pointerLockElement === canvas); keys.clear(); mouseDown = false; });
 window.addEventListener('blur', () => { keys.clear(); mouseDown = false; });
 window.addEventListener('blur', cancelSpecial);
 document.addEventListener('visibilitychange', () => { if (document.hidden) { mouseDown = false; cancelSpecial(); } });
@@ -537,7 +634,7 @@ setInterval(() => {
   if (p.weapon !== 'iron' && p.weapon !== 'air') return;
   room.send('weapon:trigger', { action: p.triggerHeld ? 'aim' : 'start', shot: weaponShot() }); specialHeld = true;
 }, 100);
-el('pause').onclick = e => { if ((e.target as HTMLElement).id !== 'leave') canvas.requestPointerLock(); };
+el('pause').onclick = e => { if (mapsSidebar.hidden && (e.target as HTMLElement).id !== 'leave') canvas.requestPointerLock(); };
 
 let previous = performance.now();
 setInterval(() => {
@@ -595,7 +692,8 @@ function frame(now: number) {
       if (map.back?.enabled && me?.alive && (local.transitionCooldown ?? 0) > 0 && !boardFlip) {
         // Heading changes only at X edges. Use the actual crossed edge, including corners.
         const xEdge = Math.abs((local.headingOffset ?? 0) - renderedHeading) > 1;
-        boardFlip = { orbit: new EdgeOrbit(camera.position, map, playerTuning.height, xEdge), started: now,
+        const boundary = nearestFlipEdge(map, camera.position.x, camera.position.z, visualSide);
+        boardFlip = { orbit: new EdgeOrbit(camera.position, map, playerTuning.height, xEdge, boundary && boundary.distance < 3 ? boundary : undefined), started: now,
           sourceHeading: renderedHeading, progress: 0 };
       } else boardFlip = null; // Respawn/reconnect is not an edge crossing.
       visualSide = side;

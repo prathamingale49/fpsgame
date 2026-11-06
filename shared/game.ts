@@ -1,5 +1,6 @@
 export const TICK = 1 / 60;
-export const MOVEMENT_PROTOCOL = 7;
+// Older clients assume BMS for every multiplayer room.
+export const MOVEMENT_PROTOCOL = 8;
 export const EDGE_FLIP_SECONDS = .9;
 export const FLIP_COOLDOWN_SECONDS = 5;
 export const MATCH_SECONDS = 300;
@@ -36,7 +37,31 @@ export type Box = { min: [number, number, number]; max: [number, number, number]
 export type Spawn = [number, number, number];
 export type BoardSide = 'front' | 'back';
 export type BoardBack = { boxes: Box[]; thickness: number; enabled: boolean };
-export type MapData = { id: string; title: string; width: number; depth: number; ground: number; boxes: Box[]; spawns: Spawn[]; back?: BoardBack; model?: string; texture?: string; components?: { ref: string; x: number; z: number; rotation: number; layer: string }[] };
+export type MapData = { id: string; title: string; width: number; depth: number; ground: number; surface?: number[]; backTexture?: string; boardColor?: string; flipEdges?: number[][]; boxes: Box[]; spawns: Spawn[]; back?: BoardBack; model?: string; texture?: string; components?: { ref: string; x: number; z: number; rotation: number; layer: string }[] };
+const floorIndices = new WeakMap<MapData, Map<string, number[]>>();
+// Triangulated STEP substrate top, including its outline and cutouts.
+export function onBoard(map: MapData, x: number, z: number, side: BoardSide = 'front'): boolean {
+  if (side === 'back') z = -z;
+  if (!map.surface) return Math.abs(x) <= map.width / 2 && Math.abs(z) <= map.depth / 2;
+  const t = map.surface;
+  let cells = floorIndices.get(map);
+  if (!cells) {
+    cells = new Map();
+    for (let i=0;i<t.length;i+=6) {
+      const x0=Math.floor(Math.min(t[i],t[i+2],t[i+4])/8), x1=Math.floor(Math.max(t[i],t[i+2],t[i+4])/8);
+      const z0=Math.floor(Math.min(t[i+1],t[i+3],t[i+5])/8), z1=Math.floor(Math.max(t[i+1],t[i+3],t[i+5])/8);
+      for(let ix=x0;ix<=x1;ix++) for(let iz=z0;iz<=z1;iz++) { const key=`${ix},${iz}`, list=cells.get(key) ?? []; list.push(i); cells.set(key,list); }
+    }
+    floorIndices.set(map,cells);
+  }
+  for (const i of cells.get(`${Math.floor(x/8)},${Math.floor(z/8)}`) ?? []) {
+    if (x < Math.min(t[i],t[i+2],t[i+4]) || x > Math.max(t[i],t[i+2],t[i+4]) || z < Math.min(t[i+1],t[i+3],t[i+5]) || z > Math.max(t[i+1],t[i+3],t[i+5])) continue;
+    const cross = (a: number, b: number, c: number, d: number) => (x-a)*(d-b)-(z-b)*(c-a);
+    const a = cross(t[i],t[i+1],t[i+2],t[i+3]), b = cross(t[i+2],t[i+3],t[i+4],t[i+5]), c = cross(t[i+4],t[i+5],t[i],t[i+1]);
+    if ((a >= -1e-7 && b >= -1e-7 && c >= -1e-7) || (a <= 1e-7 && b <= 1e-7 && c <= 1e-7)) return true;
+  }
+  return false;
+}
 export type Input = { seq: number; forward: number; strafe: number; yaw: number; pitch: number; jump: boolean; sprint: boolean };
 export type ShotInput = { shotId: number; seq: number; yaw: number; pitch: number; viewTime?: number };
 export function validShotInput(value: unknown): value is ShotInput {
@@ -80,23 +105,39 @@ const surfaceMaps = new WeakMap<MapData, MapData>();
 export function surfaceMap(map: MapData, side: BoardSide = 'front'): MapData {
   if (side !== 'back' || !map.back?.enabled) return map;
   let back = surfaceMaps.get(map);
-  if (!back) { back = { ...map, boxes: map.back.boxes }; surfaceMaps.set(map, back); }
+  if (!back) { back = { ...map, boxes: map.back.boxes, surface: map.surface?.map((v, i) => i % 2 ? -v : v) }; surfaceMaps.set(map, back); }
   return back;
+}
+
+/** Nearest explicit interior boundary, expressed in the departing surface frame. */
+export function nearestFlipEdge(map: MapData, x: number, z: number, side: BoardSide = 'front') {
+  const sign = side === 'back' ? -1 : 1;
+  let best: { x: number; z: number; nx: number; nz: number; distance: number } | undefined;
+  for (const [ax,az,bx,bz,nx,nz] of map.flipEdges ?? []) {
+    const dx=bx-ax, dz=(bz-az)*sign, sx=ax, sz=az*sign;
+    const t=clamp(((x-sx)*dx+(z-sz)*dz)/(dx*dx+dz*dz),0,1);
+    const px=sx+t*dx, pz=sz+t*dz, distance=Math.hypot(x-px,z-pz);
+    if (!best || distance<best.distance) best={x:px,z:pz,nx,nz:nz*sign,distance};
+  }
+  return best;
 }
 
 export function transitionEdge(motion: Motion, map: MapData, tuning: PlayerTuning): Motion {
   if (!map.back?.enabled) return motion;
+  const edge = nearestFlipEdge(map, motion.x, motion.z, motion.side);
+  const slot = edge && edge.distance < 3 && !onBoard(map, motion.x, motion.z, motion.side) ? edge : undefined;
+  if (slot && ((motion.transitionCooldown ?? 0) > 0 || (motion.flipCooldown ?? 0) > 0)) return { ...motion, x: slot.x-slot.nx*(tuning.radius+.3), z: slot.z-slot.nz*(tuning.radius+.3) };
   if ((motion.transitionCooldown ?? 0) > 0 || (motion.flipCooldown ?? 0) > 0) return { ...motion,
     x: clamp(motion.x, -map.width / 2 + tuning.radius, map.width / 2 - tuning.radius),
     z: clamp(motion.z, -map.depth / 2 + tuning.radius, map.depth / 2 - tuning.radius) };
-  const xOutside = Math.abs(motion.x) > map.width / 2;
+  const xOutside = slot ? Math.abs(slot.nx) > .5 : Math.abs(motion.x) > map.width / 2;
   const zOutside = Math.abs(motion.z) > map.depth / 2;
-  if (!xOutside && !zOutside) return motion;
+  if (!slot && !xOutside && !zOutside) return motion;
   const side = motion.side === 'back' ? 'front' : 'back';
   const margin = tuning.radius + .3;
-  const x = clamp(motion.x, -map.width / 2 + margin, map.width / 2 - margin);
+  const x = slot ? slot.x-slot.nx*margin : clamp(motion.x, -map.width / 2 + margin, map.width / 2 - margin);
   // The same physical edge changes local Z sign after rotation about X.
-  const z = clamp(-motion.z, -map.depth / 2 + margin, map.depth / 2 - margin);
+  const z = slot ? -(slot.z-slot.nz*margin) : clamp(-motion.z, -map.depth / 2 + margin, map.depth / 2 - margin);
   let y = map.ground;
   for (const box of surfaceMap(map, side).boxes) if (touches(x, z, box, tuning.radius + .02)) y = Math.max(y, box.max[1]);
   // X edges retain their sign in the rotated frame: turn the view inward.
@@ -196,7 +237,7 @@ export function stepMotion(previous: Motion, input: Input, map: MapData, dt = TI
     out.vy -= tuning.gravity * dt;
     out.y += out.vy * dt;
     out.grounded = false;
-    const overBoard = Math.abs(out.x) <= map.width / 2 && Math.abs(out.z) <= map.depth / 2;
+    const overBoard = onBoard(map, out.x, out.z);
     if (overBoard && oldY >= map.ground - .02 && out.y <= map.ground) { out.y = map.ground; out.vy = 0; out.grounded = true; }
   }
   const candidates = nearby(map, Math.min(out.x, out.x + dx) - tuning.radius, Math.min(out.z, out.z + dz) - tuning.radius, Math.max(out.x, out.x + dx) + tuning.radius, Math.max(out.z, out.z + dz) + tuning.radius);

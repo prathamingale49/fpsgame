@@ -6,9 +6,10 @@ import fs from 'node:fs';
 const browser = await chromium.launch({ headless: true, executablePath: 'C:/Program Files/Google/Chrome/Application/chrome.exe', args: process.env.BACKSIDE_RENDERER === 'hardware' ? ['--enable-webgl'] : ['--enable-webgl', '--use-gl=angle', '--use-angle=swiftshader', '--enable-unsafe-swiftshader'] });
 fs.mkdirSync('artifacts', { recursive: true });
 try {
-  for (const [edge, yaw] of [['north', 0], ['south', Math.PI], ['east', -Math.PI / 2], ['west', Math.PI / 2]] as const) {
+  const entries: [string, number][] = process.env.TEST_SLOT === '1' ? JSON.parse(fs.readFileSync('assets/public/maps/flight-sam.json', 'utf8')).flipEdges.map((edge: number[], i: number) => [`slot-${i}`, Math.atan2(-edge[4], -edge[5])]) : [['north', 0], ['south', Math.PI], ['east', -Math.PI / 2], ['west', Math.PI / 2]];
+  for (const [edge, yaw] of entries.filter(([edge]) => !process.env.TEST_ONLY_EDGE || edge === process.env.TEST_ONLY_EDGE)) {
     const port = 26688, base = `http://localhost:${port}`;
-    const server = spawn(process.execPath, ['--import', 'tsx', 'tests/fixtures/bms-side-server.ts'], { env: { ...process.env, PORT: String(port), TEST_EDGE: edge }, stdio: 'pipe' });
+    const server = spawn(process.execPath, ['--import', 'tsx', 'tests/fixtures/bms-side-server.ts'], { env: { ...process.env, PORT: String(port), TEST_EDGE: edge, TEST_MAP_ID: process.env.TEST_MAP_ID || 'bms' }, stdio: 'pipe' });
     let logs = ''; server.stderr?.on('data', chunk => { logs += chunk; });
     const ca = await browser.newContext({ viewport: { width: 1000, height: 700 } });
     const cb = await browser.newContext({ viewport: { width: 800, height: 600 } });
@@ -27,7 +28,7 @@ try {
       catch { throw new Error(`Join failed: ${await a.locator('#error').textContent()} errors=${errors} server=${logs}`); }
       const code = (await a.locator('#room-label').textContent())?.match(/ROOM ([A-Z0-9]+)/)?.[1];
       if (!code) throw new Error('Missing room code');
-      await b.locator('#code').fill(code); await b.locator('#join').click();
+      await b.locator('.join-details summary').click(); await b.locator('#code').fill(code); await b.locator('#join').click();
       await b.locator('#hud:not(.hidden)').waitFor();
       await a.locator('#game[data-model-loaded="true"]').waitFor({ timeout: 60000 });
       const start = async (testYaw: number, ticks = 18) => a.evaluate(({ y, ticks }) => (window as any).__pcbStartMovementTest(ticks, y), { y: testYaw, ticks });
@@ -45,12 +46,12 @@ try {
       await a.locator('#game[data-side="back"]').waitFor();
       const orbitImage = await a.evaluate(() => (window as any).__orbitImage) as string;
       if (!orbitImage) throw new Error('Missing mid-orbit capture');
-      fs.writeFileSync(`artifacts/bms-orbit-${edge}.png`, Buffer.from(orbitImage.split(',')[1], 'base64'));
+      fs.writeFileSync(`artifacts/${process.env.TEST_MAP_ID || 'bms'}-orbit-${edge}.png`, Buffer.from(orbitImage.split(',')[1], 'base64'));
       const back = await a.evaluate(() => (window as any).__pcbPerf());
       if (Math.abs(back.cameraRoll) > .001 || Math.abs(back.worldRotation - Math.PI) > .001) throw new Error(`Camera/world orientation wrong: ${JSON.stringify(back)}`);
       if (await a.locator('#side-label').textContent() !== 'BACK') throw new Error('HUD side mismatch');
       await b.waitForFunction(() => (window as any).__pcbMovementSnapshots.some((s: any) => s.players.some((p: any) => p.side === 'back')), null, { timeout: 15000 });
-      await a.screenshot({ path: `artifacts/bms-back-${edge}.png` });
+      await a.screenshot({ path: `artifacts/${process.env.TEST_MAP_ID || 'bms'}-back-${edge}.png` });
       // Return across the extra safety inset as well as the distance walked in.
       await start(yaw + Math.PI, 30);
       try { await a.waitForFunction(() => { const p = (window as any).__pcbPerf(); return p.side === 'front' && p.authoritativeSide === 'front' && p.pending === 0 && p.testRemaining === 0 && p.orbitProgress === null && p.flipCooldown === 0; }, null, { timeout: 20000 }); }
@@ -58,7 +59,7 @@ try {
       await a.locator('#game[data-side="front"]').waitFor();
       const front = await a.evaluate(() => (window as any).__pcbPerf());
       if (Math.abs(front.cameraRoll) > .001 || front.worldRotation !== 0) throw new Error('Front camera/world orientation wrong');
-      await a.screenshot({ path: `artifacts/bms-front-${edge}.png` });
+      await a.screenshot({ path: `artifacts/${process.env.TEST_MAP_ID || 'bms'}-front-${edge}.png` });
       const frames = await a.evaluate(() => (window as any).__orbitFrames) as { t: number; world: number; position: number[] }[];
       if (frames.length < 8 || !frames.some(f => f.t > .2 && f.t < .8)) throw new Error(`Insufficient orbit frames: ${JSON.stringify(frames.map(f => f.t))}`);
       if (frames.some(f => Math.abs(f.world) > .001 && Math.abs(f.world - Math.PI) > .001)) throw new Error('Board spun during orbit');

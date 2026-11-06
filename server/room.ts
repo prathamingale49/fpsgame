@@ -3,7 +3,7 @@ import { Room, type Client } from 'colyseus';
 import { MatchState, PlayerState, PickupState, WeaponPickupState } from './state.js';
 import { WEAPONS, validWeaponId, ironDamage, sniperAim, pumpRays, weaponHits, weaponKillMessage, HEAT, type WeaponId } from '../shared/weapons.js';
 import { weaponPickupLocations, droppedWeaponPosition, canCollectWeapon, WEAPON_PICKUPS } from '../shared/weapon-pickups.js';
-import { aimRay, movementYaw, collisionCacheStats, hitscan, initialMotion, samplePosition, stepMotion, testMap, TICK, MOVEMENT_PROTOCOL, MATCH_SECONDS, RESPAWN_SECONDS, PLAYER, WEAPON, COMBAT, tuningForHeight, validDevHeight, validInput, validShotInput, type Input, type ShotInput, type PositionSample, type MapData, type Motion, type PlayerTuning, type BoardSide } from '../shared/game.js';
+import { onBoard, aimRay, movementYaw, collisionCacheStats, hitscan, initialMotion, samplePosition, stepMotion, testMap, TICK, MOVEMENT_PROTOCOL, MATCH_SECONDS, RESPAWN_SECONDS, PLAYER, WEAPON, COMBAT, tuningForHeight, validDevHeight, validInput, validShotInput, type Input, type ShotInput, type PositionSample, type MapData, type Motion, type PlayerTuning, type BoardSide } from '../shared/game.js';
 const PLAYER_PICKUP_DISTANCE = .9;
 const TRACE_MOVEMENT = process.env.PCB_MOVEMENT_TRACE === '1';
 export const DEV_SCALE_ENABLED = process.env.PCB_DEV_SCALE === '1' && process.env.NODE_ENV !== 'production';
@@ -11,12 +11,18 @@ export const DEV_SCALE_ENABLED = process.env.PCB_DEV_SCALE === '1' && process.en
 type Runtime = { queue: Map<number, Input>; lastReceived: number; lastSeq: number; credit: number; lastShot: number; lastShotId: number; reloadAt: number; respawnAt: number };
 export let activeMap: MapData = testMap;
 export function setActiveMap(map: MapData) { activeMap = map; }
+let multiplayerMaps: MapData[] = [];
+export function setMultiplayerMaps(maps: MapData[]) { multiplayerMaps = [...maps]; }
+export function chooseMultiplayerMap(random = Math.random): MapData { return multiplayerMaps.length ? multiplayerMaps[Math.floor(random() * multiplayerMaps.length)] : activeMap; }
+export const practiceMaps = new Map<string, MapData>();
+export function registerPracticeMap(map: MapData) { practiceMaps.set(map.id, map); }
 export const serverPerf = { ticks: 0, tickMsTotal: 0, tickMsMax: 0, queueMax: 0, queueTotal: 0, processed: 0, cache: () => collisionCacheStats(activeMap) };
 export function safeName(value: unknown): string {
   return typeof value === 'string' ? value.replace(/[^\p{L}\p{N} _-]/gu, '').trim().slice(0, 18) || 'Engineer' : 'Engineer';
 }
 
 export class GameRoom extends Room {
+  private map: MapData = activeMap;
   private weapons = new Map<string, { held: boolean; lease: number; shot?: ShotInput; pulse: number; heatAt: number; stocks: Map<WeaponId, { ammo: number; reserve: number }> }>();
   private weaponControl(id: string) {
     let control = this.weapons.get(id);
@@ -31,7 +37,7 @@ export class GameRoom extends Room {
   private dropSpecial(id: string): boolean {
     const p = this.state.players.get(id), r = this.runtime.get(id);
     if (this.practice || !p || !r || !validWeaponId(p.specialWeapon) || p.specialWeapon === 'solder') return true;
-    const point = droppedWeaponPosition(p, activeMap); if (!point) return false;
+    const point = droppedWeaponPosition(p, this.map); if (!point) return false;
     const weapon = p.specialWeapon, c = this.weaponControl(id), config = WEAPONS[weapon];
     const stock = p.weapon === weapon ? { ammo: p.ammo, reserve: p.reserve } : c.stocks.get(weapon) ?? { ammo: config.magazine, reserve: config.reserve };
     const reloadAt = weapon === 'sniper' ? p.sniperReloadAt : p.weapon === weapon && p.reloading ? r.reloadAt : 0;
@@ -57,20 +63,22 @@ export class GameRoom extends Room {
   private readonly pickupSeconds = Number(process.env.PCB_TEST_PICKUP_SECONDS || WEAPON.pickupRespawnSeconds);
   private playerTuning: PlayerTuning = PLAYER;
 
-  onCreate() {
+  onCreate(options: { mapId?: string; private?: boolean } = {}) {
+    this.map = this.practice ? practiceMaps.get(options.mapId ?? "bms") ?? activeMap : chooseMultiplayerMap();
     this.state.practice = this.practice;
+    if (!this.practice && options.private === true) void this.setPrivate(true);
 
-    if (!this.practice) weaponPickupLocations(activeMap, Math.floor(Math.random() * 0xffffffff)).forEach((point, index) => this.state.weaponPickups.set(String(index), new WeaponPickupState({ ...point, weapon: index >= 9 ? 'sniper' : (['iron', 'air', 'pump'] as const)[index % 3] })));
+    if (!this.practice) weaponPickupLocations(this.map, Math.floor(Math.random() * 0xffffffff)).forEach((point, index) => this.state.weaponPickups.set(String(index), new WeaponPickupState({ ...point, weapon: index >= 9 ? 'sniper' : (['iron', 'air', 'pump'] as const)[index % 3] })));
     if (this.practice) { this.maxClients = 1; void this.setPrivate(true); }
     this.onMessage('practice:movement', () => { if (this.practice) this.state.npcMovement = !this.state.npcMovement; });
     this.roomId = Math.random().toString(36).slice(2, 8).toUpperCase();
-    this.state.mapId = activeMap.id;
+    this.state.mapId = this.map.id;
     this.state.playerHeight = this.playerTuning.height;
     this.state.seconds = this.matchSeconds;
-    activeMap.spawns.slice(2, 8).forEach((spawn, index) => this.state.pickups.set(String(index), new PickupState({ x: spawn[0], y: spawn[1] + .2, z: spawn[2] })));
-    if (activeMap.back?.enabled) activeMap.spawns.slice(2, 8).forEach((spawn, index) => {
+    this.map.spawns.slice(2, 8).forEach((spawn, index) => this.state.pickups.set(String(index), new PickupState({ x: spawn[0], y: spawn[1] + .2, z: spawn[2] })));
+    if (this.map.back?.enabled) this.map.spawns.slice(2, 8).forEach((spawn, index) => {
       const x = spawn[0], z = -spawn[2];
-      const y = Math.max(activeMap.ground, ...activeMap.back!.boxes.filter(b => x + .5 > b.min[0] && x - .5 < b.max[0] && z + .5 > b.min[2] && z - .5 < b.max[2]).map(b => b.max[1]));
+      const y = Math.max(this.map.ground, ...this.map.back!.boxes.filter(b => x + .5 > b.min[0] && x - .5 < b.max[0] && z + .5 > b.min[2] && z - .5 < b.max[2]).map(b => b.max[1]));
       this.state.pickups.set(`back-${index}`, new PickupState({ x, y: y + .2, z, side: 'back' }));
     });
     this.setSimulationInterval(() => this.tick(), 1000 / 60);
@@ -102,7 +110,7 @@ export class GameRoom extends Room {
       const request = value as { id?: unknown; version?: unknown }, p = this.state.players.get(client.sessionId);
       if (typeof request.id !== 'string' || !Number.isSafeInteger(request.version) || !p || p.npc || p.transitionCooldown > 0) return;
       const pickup = this.state.weaponPickups.get(request.id);
-      if (!pickup || pickup.version !== request.version || !canCollectWeapon(p, pickup, activeMap) || p.specialWeapon === pickup.weapon) return;
+      if (!pickup || pickup.version !== request.version || !canCollectWeapon(p, pickup, this.map) || p.specialWeapon === pickup.weapon) return;
       const now = Date.now() / 1000, drop = this.drops.get(request.id);
       if (pickup.dropped && (!drop || now >= drop.expiresAt || drop.owner === client.sessionId && now < drop.unlockAt)) return;
       if (!this.dropSpecial(client.sessionId)) return;
@@ -169,7 +177,7 @@ export class GameRoom extends Room {
 
   onJoin(client: Client, options: { name?: string; protocol?: number }) {
     if (options?.protocol !== MOVEMENT_PROTOCOL) throw new Error('Game client and server versions differ; refresh the page.');
-    const spawn = activeMap.spawns[this.spawnIndex++ % activeMap.spawns.length];
+    const spawn = this.map.spawns[this.spawnIndex++ % this.map.spawns.length];
     const p = new PlayerState({ name: safeName(options?.name), x: spawn[0], y: spawn[1], z: spawn[2] });
     this.state.players.set(client.sessionId, p);
     this.runtime.set(client.sessionId, { queue: new Map(), lastReceived: 0, lastSeq: 0, credit: 0, lastShot: -Infinity, lastShotId: -1, reloadAt: 0, respawnAt: 0 });
@@ -214,8 +222,8 @@ export class GameRoom extends Room {
     this.weaponRespawns.clear();
     this.elapsed = 0; this.state.seconds = this.matchSeconds; this.state.winner = ''; this.state.phase = 'playing';
     this.state.players.forEach((p) => {
-      if (Math.abs(p.x) >= activeMap.width / 2 || Math.abs(p.z) >= activeMap.depth / 2 || p.y < activeMap.ground - 1) {
-        const spawn = activeMap.spawns[this.spawnIndex++ % activeMap.spawns.length], motion = initialMotion(spawn);
+      if (Math.abs(p.x) >= this.map.width / 2 || Math.abs(p.z) >= this.map.depth / 2 || p.y < this.map.ground - 1) {
+        const spawn = this.map.spawns[this.spawnIndex++ % this.map.spawns.length], motion = initialMotion(spawn);
         p.x = motion.x; p.y = motion.y; p.z = motion.z; p.vy = motion.vy; p.grounded = true;
         p.side = 'front'; p.transitionCooldown = 0; p.flipCooldown = 0; p.headingOffset = 0;
       }
@@ -276,7 +284,7 @@ export class GameRoom extends Room {
       if (p.npc) {
         const bot = this.bots.get(id)!;
         if (now >= bot.next) { bot.next = now + 1 + Math.random() * 2; bot.yaw = Math.random() * Math.PI * 2; bot.moving = bot.mode !== 0 && Math.random() > .2; bot.sprint = bot.mode === 2 && Math.random() < .4; if (!bot.moving) bot.next = now + .5 + Math.random() * 1.5; }
-        if (Math.abs(p.x) > activeMap.width / 2 - 3 || Math.abs(p.z) > activeMap.depth / 2 - 3) bot.yaw = Math.atan2(p.x, p.z) - p.headingOffset;
+        if (!onBoard(this.map, p.x - Math.sin(bot.yaw + p.headingOffset) * 3, p.z - Math.cos(bot.yaw + p.headingOffset) * 3, p.side as BoardSide)) bot.yaw = this.map.surface ? bot.yaw + Math.PI : Math.atan2(p.x, p.z) - p.headingOffset;
         for (let i = 0; i < Math.floor(r.credit); i++) {
           const seq = ++r.lastReceived;
           r.queue.set(seq, { seq, forward: bot.moving ? 1 : 0, strafe: 0, yaw: bot.yaw, pitch: 0, jump: bot.mode === 2 && bot.moving && Math.random() < .006, sprint: bot.sprint });
@@ -286,12 +294,12 @@ export class GameRoom extends Room {
       while (r.credit >= 1 && r.queue.has(r.lastSeq + 1) && processed < 60) {
         const input = r.queue.get(r.lastSeq + 1)!;
         r.queue.delete(input.seq);
-        const motion = stepMotion({ x: p.x, y: p.y, z: p.z, vy: p.vy, grounded: p.grounded, jumpHeld: p.jumpHeld, mantleTarget: p.mantleTarget, side: p.side as BoardSide, transitionCooldown: p.transitionCooldown, flipCooldown: p.flipCooldown, headingOffset: p.headingOffset }, input, activeMap, TICK, undefined, this.playerTuning);
+        const motion = stepMotion({ x: p.x, y: p.y, z: p.z, vy: p.vy, grounded: p.grounded, jumpHeld: p.jumpHeld, mantleTarget: p.mantleTarget, side: p.side as BoardSide, transitionCooldown: p.transitionCooldown, flipCooldown: p.flipCooldown, headingOffset: p.headingOffset }, input, this.map, TICK, undefined, this.playerTuning);
         p.x = motion.x; p.y = motion.y; p.z = motion.z; p.vy = motion.vy; p.grounded = motion.grounded; p.jumpHeld = motion.jumpHeld; p.mantleTarget = motion.mantleTarget;
         p.side = motion.side ?? 'front'; p.transitionCooldown = motion.transitionCooldown ?? 0; p.flipCooldown = motion.flipCooldown ?? 0; p.headingOffset = motion.headingOffset ?? 0;
         p.yaw = input.yaw; p.pitch = input.pitch;
         r.lastSeq = input.seq; p.ack = input.seq; r.credit--; processed++;
-        if (p.y < activeMap.ground - PLAYER.fallDeathDepth) { this.fall(id, now); break; }
+        if (p.y < this.map.ground - PLAYER.fallDeathDepth) { this.fall(id, now); break; }
         if (TRACE_MOVEMENT) console.log('MOVE_TRACE', JSON.stringify({ event: 'process', player: id, seq: input.seq, ack: p.ack, queue: r.queue.size, position: [p.x, p.y, p.z] }));
       }
       serverPerf.processed += processed;
@@ -373,13 +381,13 @@ export class GameRoom extends Room {
     });
     if (p.weapon !== 'solder') {
       const rays = p.weapon === 'pump' ? pumpRays(p.x, p.y, p.z, movementYaw(shot?.yaw ?? p.yaw, p as unknown as Motion), shot?.pitch ?? p.pitch, this.playerTuning) : [ray];
-      const result = weaponHits(p.weapon as WeaponId, ray, rays, activeMap, opponents, id, this.playerTuning, p.side as BoardSide, p.weapon === 'iron' ? ironDamage(charge!) : config.damage);
+      const result = weaponHits(p.weapon as WeaponId, ray, rays, this.map, opponents, id, this.playerTuning, p.side as BoardSide, p.weapon === 'iron' ? ironDamage(charge!) : config.damage);
       for (const trace of result.traces) this.broadcast('shot', { shooter: id, side: p.side, weapon: p.weapon, ...trace });
       for (const [target, amount] of result.hits) this.damage(id, target, amount, now);
       if (p.weapon !== 'air' && p.ammo === 0 && p.reserve > 0) this.reload(id);
       return;
     }
-    const result = hitscan(ray, activeMap, opponents, id, this.playerTuning, p.side as BoardSide);
+    const result = hitscan(ray, this.map, opponents, id, this.playerTuning, p.side as BoardSide);
     const end = ray.origin.map((v, i) => v + ray.direction[i] * result.distance);
     this.broadcast('shot', { shooter: id, shotId: shot?.shotId, side: p.side, from: ray.origin, to: end, hit: result.target });
     if (p.ammo === 0 && p.reserve > 0) this.reload(id);
@@ -409,7 +417,7 @@ export class GameRoom extends Room {
     this.killChain.reset(id);
     const p = this.state.players.get(id); if (!p) return;
     this.hitHistory.delete(id);
-    const spawn = p.npc ? this.botSpawn(Number(id.slice(4))) : activeMap.spawns[this.spawnIndex++ % activeMap.spawns.length];
+    const spawn = p.npc ? this.botSpawn(Number(id.slice(4))) : this.map.spawns[this.spawnIndex++ % this.map.spawns.length];
     const m = initialMotion(spawn);
     p.x = m.x; p.y = m.y; p.z = m.z; p.vy = 0; p.grounded = true; p.jumpHeld = false; p.mantleTarget = 0;
     p.side = 'front'; p.transitionCooldown = 0; p.flipCooldown = 0; p.headingOffset = 0;
@@ -420,23 +428,24 @@ export class GameRoom extends Room {
   }
 
   private botSpawn(index: number): [number, number, number] {
+    if (this.map.surface) return this.map.spawns[(index + 1) % this.map.spawns.length];
     const human = [...this.state.players.values()].find(p => !p.npc);
-    const origin = human ?? { x: activeMap.spawns[0][0], z: activeMap.spawns[0][2] };
+    const origin = human ?? { x: this.map.spawns[0][0], z: this.map.spawns[0][2] };
     for (let radius = 4; radius <= 18; radius += 2) for (let k = 0; k < 32; k++) {
       const angle = (k + index * 6) * Math.PI / 16;
       const x = origin.x + Math.sin(angle) * radius, z = origin.z - Math.cos(angle) * radius;
-      if (Math.abs(x) > activeMap.width / 2 - 2 || Math.abs(z) > activeMap.depth / 2 - 2) continue;
-      if (activeMap.boxes.some(b => x + this.playerTuning.radius > b.min[0] && x - this.playerTuning.radius < b.max[0] && z + this.playerTuning.radius > b.min[2] && z - this.playerTuning.radius < b.max[2])) continue;
+      if (Math.abs(x) > this.map.width / 2 - 2 || Math.abs(z) > this.map.depth / 2 - 2) continue;
+      if (this.map.boxes.some(b => x + this.playerTuning.radius > b.min[0] && x - this.playerTuning.radius < b.max[0] && z + this.playerTuning.radius > b.min[2] && z - this.playerTuning.radius < b.max[2])) continue;
       let reachable = true;
       for (let step = 1; step <= Math.ceil(radius * 4); step++) {
         const t = step / Math.ceil(radius * 4), px = origin.x + (x - origin.x) * t, pz = origin.z + (z - origin.z) * t;
-        if (activeMap.boxes.some(b => px + this.playerTuning.radius > b.min[0] && px - this.playerTuning.radius < b.max[0] && pz + this.playerTuning.radius > b.min[2] && pz - this.playerTuning.radius < b.max[2])) { reachable = false; break; }
+        if (this.map.boxes.some(b => px + this.playerTuning.radius > b.min[0] && px - this.playerTuning.radius < b.max[0] && pz + this.playerTuning.radius > b.min[2] && pz - this.playerTuning.radius < b.max[2])) { reachable = false; break; }
       }
       if (!reachable) continue;
       if ([...this.state.players.values()].some(p => p.npc && Math.hypot(p.x - x, p.z - z) < 1)) continue;
-      return [x, activeMap.ground, z];
+      return [x, this.map.ground, z];
     }
-    return activeMap.spawns[index % activeMap.spawns.length];
+    return this.map.spawns[index % this.map.spawns.length];
   }
 
   private spawnBots() {
