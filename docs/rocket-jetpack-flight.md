@@ -10,16 +10,16 @@ All parameters are centralized in `JETPACK` in `shared/game.ts`:
 
 | Parameter | Value at the default 0.90 mm player scale |
 | --- | --- |
-| Continuous fuel | 2.5 seconds |
+| Fuel capacity / consumption | 1.5 engine-seconds / 1.1× burn (about 1.36 seconds continuous thrust) |
 | Empty-to-full grounded recharge | 3 seconds |
 | Gravity | 30 mm/s² (unchanged) |
-| Engine acceleration | 54 mm/s² (1.8 × gravity; net +24 mm/s²) |
+| Engine acceleration | 51 mm/s² (1.7 × gravity; net +21 mm/s²) |
 | Maximum ascent | 15 mm/s (1.5 × ground sprint speed) |
-| Terminal descent | 22.5 mm/s (2.25 × ground sprint speed) |
-| Horizontal flight speed | 7 mm/s, normalized diagonal input |
+| Terminal descent | 20 mm/s (2 × ground sprint speed) |
+| Horizontal flight speed | 5.95 mm/s (0.85 × walk speed), normalized diagonal input |
 | Input safety lease | 250 ms before missing inputs become neutral physics |
 
-The first jump uses the existing impulse without any rocket acceleration. Airborne engine activation/release adds/removes acceleration without resetting momentum. Speed limits scale with the existing player tuning. Lowering the engine ascent cap does not instantly discard an existing faster normal-jump impulse. A full rocket launch reaches roughly 35 mm before fuel runs out at the default scale, enough to reach tall board components.
+The first jump uses the existing impulse without any rocket acceleration. Airborne engine activation/release adds/removes acceleration without resetting momentum. Speed limits scale with the existing player tuning. Lowering the engine ascent cap does not instantly discard an existing faster normal-jump impulse. The accepted preset also uses a 1.05× normal jump impulse; all nine tuning values are the branch defaults and the Reset Flight preset. Existing saved browser settings remain explicit overrides until Reset Flight is used.
 
 ## Demo tuning (F4)
 
@@ -27,7 +27,7 @@ In demo/development mode (`npm run dev:scale`, or `PCB_DEV_SCALE=1` on a non-pro
 
 Settings are validated on the server and replicated to everyone in that room, including the local prediction solver. They cannot be changed on ordinary servers. Adjustments preserve remaining fuel and velocity, clear obsolete pending inputs, and affect only the current room. Settings save automatically in this browser and reapply when switching practice boards or reconnecting. **Reset Flight** restores defaults; **Copy Settings** copies the confirmed tuning as JSON. Network safety leases, collision tolerances, and numerical epsilon remain fixed internal safeguards.
 
-Fuel capacity is measured in engine-seconds at 1× burn. Actual continuous boost time is `capacity / burn rate`. Default normal-jump strength and gravity are 1×, preserving normal jumping. Demo gravity/jump sliders deliberately allow testing alternatives. Close the panel and click the game to resume.
+Fuel capacity is measured in engine-seconds at 1× burn. Actual continuous boost time is `capacity / burn rate`. Default jump strength is 1.05× and gravity is 1×; the first press still uses only the normal jump impulse, without engine thrust. Demo gravity/jump sliders deliberately allow testing alternatives. Close the panel and click the game to resume.
 
 ## State, collision, and transitions
 
@@ -56,7 +56,7 @@ Every exhaust instance disposes its geometries/materials on removal or map chang
 
 Controller tests cover fuel timing, release momentum, gravity and velocity limits, grounded-only recharge, exhaustion lockout, yaw/pitch separation, ground sprint, ceiling/substrate collision, flip fuel preservation, and landings on real components on both sides of all three boards. Network tests cover two simultaneous fliers, prediction parity, observer boosting state, forged fuel rejection, missing-input falling, airborne shooting/reloading, all weapon selections, and airborne sniper ADS/recharge initiation.
 
-Browser verification exercises fuel depletion, natural landing, full recharge, shooting and weapon selection on all three PCB maps, plus a second client's visible exhaust. Screenshots were inspected. Final verification: all 160 tests pass in 21 files; TypeScript and the production build pass. Browser checks pass on all three maps with no page errors, including observer exhaust. Vite's existing client bundle-size advisory remains.
+Browser verification exercises fuel depletion, natural landing, full recharge, shooting and weapon selection on all three PCB maps, plus a second client's visible exhaust. Screenshots were inspected. Verification: the full 160-test suite passed before the accepted preset update. With the accepted preset, all 38 focused movement/network tests pass, as do TypeScript and the production build. Browser checks pass on all three maps with no page errors, including observer exhaust and Reset Flight. Vite's existing client bundle-size advisory remains.
 
 Recommended local checks:
 

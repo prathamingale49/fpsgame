@@ -3,7 +3,7 @@ import { Client, type Room } from '@colyseus/sdk';
 import { spawn } from 'node:child_process';
 import { setTimeout as delay } from 'node:timers/promises';
 import fs from 'node:fs';
-import { MOVEMENT_PROTOCOL } from '../shared/game.js';
+import { JETPACK, MOVEMENT_PROTOCOL } from '../shared/game.js';
 import type { MatchState } from '../server/state.js';
 const port=26721, fixturePort=26722, base=`http://localhost:${port}`;
 const server=spawn(process.execPath,['dist-server/main.js'],{env:{...process.env,PORT:String(port),PCB_DEV_SCALE:'1'},stdio:'ignore'});
@@ -26,7 +26,7 @@ try {
   await page.locator('#map-options button[data-map-id="recovery"]').click();
   await page.waitForFunction(()=>{const p=(window as any).__pcbPerf();return p.mapId==='recovery' && p.flightTuning.boostSeconds===5;});
   await page.keyboard.press('F4');
-  await page.locator('#flight-reset').click();await page.waitForFunction(()=>(window as any).__pcbPerf().flightTuning.boostSeconds===2.5);
+  await page.locator('#flight-reset').click();await page.waitForFunction(expected=>(window as any).__pcbPerf().flightTuning.boostSeconds===expected,JETPACK.boostSeconds);
   await page.locator('#scale-resume').click();await page.keyboard.press('KeyM');await page.locator('#map-options button[data-map-id="bms"]').click();
   await page.waitForFunction(()=>(window as any).__pcbPerf().mapId==='bms');
   for(const id of ['bms','recovery','flight-sam']) {

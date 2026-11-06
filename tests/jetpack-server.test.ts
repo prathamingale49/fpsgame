@@ -15,7 +15,7 @@ it('synchronizes two flying players, ignores forged fuel, permits combat, and fa
     const a=await client.create<MatchState>('pcb',options);rooms.push(a);a.onMessage('*',()=>{});
     const b=await client.joinById<MatchState>(a.roomId,options);rooms.push(b);b.onMessage('*',()=>{});
     await wait(()=>a.state.phase==='playing' && b.state.players?.size===2);
-    a.send('dev:flight',{...JETPACK,boostSeconds:12});await delay(100);expect(a.state.flightTuning.boostSeconds).toBe(2.5);
+    a.send('dev:flight',{...JETPACK,boostSeconds:12});await delay(100);expect(a.state.flightTuning.boostSeconds).toBe(JETPACK.boostSeconds);
     let predicted:Motion=initialMotion([0,0,0]);
     for(const seq of [1,2]) {
       const input={seq,forward:0,strafe:0,yaw:0,pitch:0,jump:seq===1,sprint:false};
@@ -28,14 +28,14 @@ it('synchronizes two flying players, ignores forged fuel, permits combat, and fa
     }
     await wait(()=>human(a).ack===62 && human(b).ack===62);
     expect(human(a).y).toBeGreaterThan(10);expect(human(b).y).toBeGreaterThan(10);
-    expect(human(a).fuel).toBeCloseTo(.6,5);expect(human(a).fuel).toBeCloseTo(predicted.fuel!,5);
+    expect(human(a).fuel).toBeCloseTo(1-JETPACK.fuelBurnRate/JETPACK.boostSeconds,5);expect(human(a).fuel).toBeCloseTo(predicted.fuel!,5);
     expect(human(a).y).toBeCloseTo(predicted.y,3);expect(human(a).x).toBeCloseTo(predicted.x,3);
     expect(b.state.players.get(a.sessionId)!.boosting).toBe(true);
     const pa=human(a),pb=human(b),yaw=Math.atan2(-(pb.x-pa.x),-(pb.z-pa.z));
     a.send('shoot',{shotId:1,seq:62,yaw,pitch:0});await wait(()=>human(b).hp===75);
     a.send('reload');await wait(()=>human(a).reloading);expect(human(a).grounded).toBe(false);
     a.send('input',{seq:63,forward:0,strafe:0,yaw:0,pitch:0,jump:'refill',sprint:false,fuel:1});
-    await delay(60);expect(human(a).ack).toBe(62);expect(human(a).fuel).toBeCloseTo(.6,5);
+    await delay(60);expect(human(a).ack).toBe(62);expect(human(a).fuel).toBeCloseTo(1-JETPACK.fuelBurnRate/JETPACK.boostSeconds,5);
     await wait(()=>human(a).grounded && !human(a).boosting,6000);
     expect(human(a).ack).toBe(62);expect(human(a).y).toBe(0);
     await wait(()=>human(a).fuel===1,4000);
@@ -72,8 +72,8 @@ it('synchronizes validated demo settings per room without resetting fuel',async(
     expect(b.state.flightTuning.rechargeSeconds).toBe(2);
     a.send('dev:flight',{...settings,boostSeconds:-1});await delay(100);expect(a.state.flightTuning.boostSeconds).toBe(5);
     for(let seq=1;seq<=62;seq++){a.send('input',{seq,forward:0,strafe:0,yaw:0,pitch:0,jump:seq!==2,sprint:false});await delay(17);}
-    await wait(()=>human(a).ack===62);expect(human(a).fuel).toBeCloseTo(.8,4);
+    await wait(()=>human(a).ack===62);expect(human(a).fuel).toBeCloseTo(1-JETPACK.fuelBurnRate/5,4);
     const separate=await client.create<MatchState>('practice',options);rooms.push(separate);separate.onMessage('*',()=>{});
-    await wait(()=>separate.state.players?.size===6);expect(separate.state.flightTuning.boostSeconds).toBe(2.5);
+    await wait(()=>separate.state.players?.size===6);expect(separate.state.flightTuning.boostSeconds).toBe(JETPACK.boostSeconds);
   }finally{for(const room of rooms)try{await room.leave();}catch{}server.kill();}
 },15000);

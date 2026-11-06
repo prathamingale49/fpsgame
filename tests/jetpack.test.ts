@@ -5,13 +5,13 @@ function launched() {return stepMotion(stepMotion(initialMotion([0,0,0]),{...idl
 const empty={...testMap,boxes:[],width:500,depth:500};
 const idle:Input={seq:1,forward:0,strafe:0,yaw:0,pitch:0,jump:false,sprint:false};
 function advance(m:Motion,count:number,input=idle,map:MapData=empty) {for(let i=0;i<count;i++)m=stepMotion(m,input,map);return m;}
-it('accelerates while held, caps ascent, and exhausts fuel in 2.5 seconds',()=>{
+it('accelerates while held, caps ascent, and exhausts fuel at the configured capacity and burn rate',()=>{
   const launch=stepMotion(initialMotion([0,0,0]),{...idle,jump:true},empty);
   const released=stepMotion(launch,idle,empty);
   const next=stepMotion(released,{...idle,jump:true},empty);
   expect(next.vy).toBeGreaterThan(released.vy);expect(next.fuel).toBeLessThan(launch.fuel!);
-  const spent=advance(launched(),150,{...idle,jump:true});
-  expect(spent.y).toBeGreaterThan(30);expect(spent.fuel).toBe(0);expect(spent.boostLocked).toBe(true);
+  const spent=advance(launched(),Math.ceil(JETPACK.boostSeconds/JETPACK.fuelBurnRate/TICK),{...idle,jump:true});
+  expect(spent.y).toBeGreaterThan(12);expect(spent.fuel).toBe(0);expect(spent.boostLocked).toBe(true);
   expect(spent.vy).toBeLessThanOrEqual(PLAYER.sprintSpeed*JETPACK.ascentSprintRatio);
   const falling=advance(spent,120,{...idle,jump:true});expect(falling.boosting).toBe(false);expect(falling.vy).toBeLessThan(0);
 });
@@ -36,7 +36,7 @@ it('steers by yaw independently of pitch and limits sprint to the ground',()=>{
   const start={...initialMotion([0,10,0]),grounded:false};
   const flat=stepMotion(start,{...idle,forward:1,strafe:1,sprint:true},empty);
   const up=stepMotion(start,{...idle,forward:1,strafe:1,sprint:true,pitch:1.4},empty);
-  expect([flat.x,flat.z]).toEqual([up.x,up.z]);expect(Math.hypot(flat.x,flat.z)).toBeCloseTo(PLAYER.walkSpeed*TICK);
+  expect([flat.x,flat.z]).toEqual([up.x,up.z]);expect(Math.hypot(flat.x,flat.z)).toBeCloseTo(PLAYER.walkSpeed*JETPACK.airSpeedRatio*TICK);
   const turn=stepMotion(start,{...idle,forward:1,yaw:Math.PI/2},empty);expect(turn.x).toBeLessThan(0);expect(Math.abs(turn.z)).toBeLessThan(1e-6);
   const sprint=stepMotion(initialMotion([0,0,0]),{...idle,forward:1,sprint:true},empty);expect(Math.abs(sprint.z)).toBeCloseTo(PLAYER.sprintSpeed*TICK);
 });
@@ -87,5 +87,5 @@ it('validates every demo parameter and applies custom fuel capacity in the share
   for(const invalid of [{...settings,boostSeconds:0},{...settings,fuelBurnRate:0},{...settings,gravityRatio:Infinity},{boostSeconds:5}]) expect(validJetpackTuning(invalid)).toBeNull();
   let m=launched();
   for(let i=0;i<150;i++)m=stepMotion(m,{...idle,jump:true},empty,TICK,undefined,PLAYER,settings);
-  expect(m.fuel).toBeCloseTo(.5,5);expect(m.boosting).toBe(true);
+  expect(m.fuel).toBeCloseTo(1-150*TICK*JETPACK.fuelBurnRate/5,5);expect(m.boosting).toBe(true);
 });

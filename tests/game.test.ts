@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import fs from 'node:fs';
-import { aimRay, collisionCacheStats, COMBAT, hitscan, initialMotion, JUMP_HEIGHT_RATIO, PLAYER, rayBox, rayPlayer, samplePosition, stepMotion, testMap, TICK, tuningForHeight, validDevHeight, validShotInput, WEAPON, type Input, type Motion, type MapData, type PositionSample } from '../shared/game';
+import { aimRay, collisionCacheStats, COMBAT, hitscan, initialMotion, JETPACK, JUMP_HEIGHT_RATIO, PLAYER, rayBox, rayPlayer, samplePosition, stepMotion, testMap, TICK, tuningForHeight, validDevHeight, validShotInput, WEAPON, type Input, type Motion, type MapData, type PositionSample } from '../shared/game';
 
 const input: Input = { seq: 1, forward: 1, strafe: 0, yaw: 0, pitch: 0, jump: false, sprint: false };
 describe('movement', () => {
@@ -25,7 +25,9 @@ describe('movement', () => {
         motion = stepMotion(motion, { ...input, forward: 0, jump: tick === 0 }, empty, TICK, undefined, tuning);
         apex = Math.max(apex, motion.y);
       }
-      expect(apex).toBeCloseTo(JUMP_HEIGHT_RATIO * height, 1);
+      const gravity=tuning.gravity*JETPACK.gravityRatio;
+      const expectedApex=(tuning.jumpSpeed*JETPACK.jumpRatio-gravity*TICK/2)**2/(2*gravity);
+      expect(apex).toBeCloseTo(expectedApex, 1);
       expect(motion.grounded).toBe(true);
       expect(aimRay(0, 0, 0, 0, 0, tuning).origin[1]).toBeCloseTo(tuning.eye, 10);
       const aboveHead = { origin: [0, height + .1, 5] as [number, number, number], direction: [0, 0, -1] as [number, number, number] };
@@ -72,7 +74,7 @@ describe('movement', () => {
     let m: Motion = { ...initialMotion([0, 0, 0]), fuel: 0 };
     let climbed = false;
     for (let i = 0; i < 100; i++) {
-      m = stepMotion(m, { ...input, forward: i < 25 ? 1 : 0, jump: true }, map);
+      m = stepMotion(m, { ...input, forward: i < 35 ? 1 : 0, jump: true }, map);
       if (m.y >= 4.25) climbed = true;
     }
     expect(climbed).toBe(true);

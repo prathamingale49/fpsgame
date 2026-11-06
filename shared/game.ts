@@ -1,7 +1,7 @@
 export const TICK = 1 / 60;
 // Flight fuel and thrust state must agree between prediction and the server.
 export const MOVEMENT_PROTOCOL = 10;
-export const JETPACK = { boostSeconds: 2.5, rechargeSeconds: 3, thrustGravityRatio: 1.8, ascentSprintRatio: 1.5, fallSprintRatio: 2.25, inputLeaseSeconds: .25, fuelEpsilon: 1e-6, fuelBurnRate: 1, airSpeedRatio: 1, gravityRatio: 1, jumpRatio: 1 } as const;
+export const JETPACK = { boostSeconds: 1.5, rechargeSeconds: 3, thrustGravityRatio: 1.7, ascentSprintRatio: 1.5, fallSprintRatio: 2, inputLeaseSeconds: .25, fuelEpsilon: 1e-6, fuelBurnRate: 1.1, airSpeedRatio: .85, gravityRatio: 1, jumpRatio: 1.05 } as const;
 export const FLIGHT_CONTROLS = [
   {key:'boostSeconds',label:'Fuel capacity',min:.25,max:15,step:.25,unit:'s'},
   {key:'fuelBurnRate',label:'Fuel consumption',min:.1,max:3,step:.05,unit:'×'},
