@@ -1,7 +1,29 @@
 export const TICK = 1 / 60;
 // Flight fuel and thrust state must agree between prediction and the server.
-export const MOVEMENT_PROTOCOL = 9;
-export const JETPACK = { boostSeconds: 2.5, rechargeSeconds: 3, thrustGravityRatio: 1.8, ascentSprintRatio: 1.5, fallSprintRatio: 2.25, inputLeaseSeconds: .25, fuelEpsilon: 1e-6 } as const;
+export const MOVEMENT_PROTOCOL = 10;
+export const JETPACK = { boostSeconds: 2.5, rechargeSeconds: 3, thrustGravityRatio: 1.8, ascentSprintRatio: 1.5, fallSprintRatio: 2.25, inputLeaseSeconds: .25, fuelEpsilon: 1e-6, fuelBurnRate: 1, airSpeedRatio: 1, gravityRatio: 1, jumpRatio: 1 } as const;
+export const FLIGHT_CONTROLS = [
+  {key:'boostSeconds',label:'Fuel capacity',min:.25,max:15,step:.25,unit:'s'},
+  {key:'fuelBurnRate',label:'Fuel consumption',min:.1,max:3,step:.05,unit:'×'},
+  {key:'rechargeSeconds',label:'Full recharge time',min:.25,max:15,step:.25,unit:'s'},
+  {key:'thrustGravityRatio',label:'Thrust / gravity',min:0,max:5,step:.05,unit:'×'},
+  {key:'ascentSprintRatio',label:'Ascent speed / sprint',min:.25,max:5,step:.05,unit:'×'},
+  {key:'fallSprintRatio',label:'Descent speed / sprint',min:.5,max:6,step:.05,unit:'×'},
+  {key:'airSpeedRatio',label:'Air steering speed',min:.25,max:3,step:.05,unit:'×'},
+  {key:'gravityRatio',label:'Gravity',min:.1,max:3,step:.05,unit:'×'},
+  {key:'jumpRatio',label:'Normal jump strength',min:.25,max:2,step:.05,unit:'×'},
+] as const;
+export type JetpackTuning = { [K in typeof FLIGHT_CONTROLS[number]['key']]: number };
+export function validJetpackTuning(value: unknown): JetpackTuning | null {
+  if (!value || typeof value !== 'object') return null;
+  const result = {} as JetpackTuning;
+  for (const control of FLIGHT_CONTROLS) {
+    const number = (value as Record<string,unknown>)[control.key];
+    if (typeof number !== 'number' || !Number.isFinite(number) || number < control.min || number > control.max) return null;
+    result[control.key] = number;
+  }
+  return result;
+}
 export const EDGE_FLIP_SECONDS = .9;
 export const FLIP_COOLDOWN_SECONDS = 5;
 export const MATCH_SECONDS = 300;
@@ -74,7 +96,7 @@ export function validShotInput(value: unknown): value is ShotInput {
     && typeof v.pitch === 'number' && Number.isFinite(v.pitch) && Math.abs(v.pitch) <= 1.5
     && (v.viewTime === undefined || (typeof v.viewTime === 'number' && Number.isFinite(v.viewTime)));
 }
-export type Motion = { fuel?: number; boosting?: boolean; boostLocked?: boolean; x: number; y: number; z: number; vy: number; grounded: boolean; jumpHeld: boolean; mantleTarget: number; side?: BoardSide; transitionCooldown?: number; flipCooldown?: number; headingOffset?: number };
+export type Motion = { fuel?: number; boosting?: boolean; boostLocked?: boolean; boostReady?: boolean; x: number; y: number; z: number; vy: number; grounded: boolean; jumpHeld: boolean; mantleTarget: number; side?: BoardSide; transitionCooldown?: number; flipCooldown?: number; headingOffset?: number };
 export type PositionSample = { time: number; x: number; y: number; z: number; side?: BoardSide };
 // Snapshots are sampled in server time so the client can render and shoot against
 // the same historical target position; never interpolate through side changes.
@@ -160,7 +182,7 @@ export const testMap: MapData = {
 };
 
 export function clamp(value: number, lo: number, hi: number): number { return Math.max(lo, Math.min(hi, value)); }
-export function initialMotion(spawn: Spawn): Motion { return { x: spawn[0], y: spawn[1], z: spawn[2], vy: 0, fuel: 1, boosting: false, boostLocked: false, grounded: true, jumpHeld: false, mantleTarget: 0, side: 'front', transitionCooldown: 0, flipCooldown: 0, headingOffset: 0 }; }
+export function initialMotion(spawn: Spawn): Motion { return { x: spawn[0], y: spawn[1], z: spawn[2], vy: 0, fuel: 1, boosting: false, boostLocked: false, boostReady: false, grounded: true, jumpHeld: false, mantleTarget: 0, side: 'front', transitionCooldown: 0, flipCooldown: 0, headingOffset: 0 }; }
 export function validInput(v: unknown): v is Input {
   if (!v || typeof v !== 'object') return false;
   const a = v as Record<string, unknown>;
@@ -209,7 +231,7 @@ function overlaps(x: number, y: number, z: number, box: Box, tuning: PlayerTunin
   return touches(x, z, box, tuning.radius) && y < box.max[1] - .01 && y + tuning.height > box.min[1] + .01;
 }
 
-export function stepMotion(previous: Motion, input: Input, map: MapData, dt = TICK, stats?: MotionStats, tuning: PlayerTuning = PLAYER): Motion {
+export function stepMotion(previous: Motion, input: Input, map: MapData, dt = TICK, stats?: MotionStats, tuning: PlayerTuning = PLAYER, jetpack: JetpackTuning = JETPACK): Motion {
   const rootMap = map;
   // The flip is part of authoritative movement, not merely a visual effect.
   // Keep the player at the arrival point until the animation has completed.
@@ -222,20 +244,22 @@ export function stepMotion(previous: Motion, input: Input, map: MapData, dt = TI
   const out = { ...previous, flipCooldown: ((previous.flipCooldown ?? 0) <= dt + .0001 ? 0 : (previous.flipCooldown ?? 0) - dt), transitionCooldown: Math.max(0, (previous.transitionCooldown ?? 0) - dt) };
   const f = input.forward, s = input.strafe;
   const len = Math.max(1, Math.hypot(f, s));
-  const speed = input.sprint && out.grounded ? tuning.sprintSpeed : tuning.walkSpeed;
+  const speed = input.sprint && out.grounded ? tuning.sprintSpeed : tuning.walkSpeed * (out.grounded ? 1 : jetpack.airSpeedRatio);
   const dx = (-Math.sin(input.yaw) * f + Math.cos(input.yaw) * s) / len * speed * dt;
   const dz = (-Math.cos(input.yaw) * f - Math.sin(input.yaw) * s) / len * speed * dt;
   out.fuel = clamp(previous.fuel ?? 1, 0, 1);
   out.boostLocked = input.jump && (previous.boostLocked ?? false);
   if (input.jump && out.fuel <= JETPACK.fuelEpsilon) out.boostLocked = true;
   const launching = input.jump && !out.jumpHeld && out.grounded;
-  // Preserve a short tap's existing jump arc. Sustained acceleration starts on
-  // the following tick, so pressing Space in flight never resets velocity.
-  if (launching) { out.vy = tuning.jumpSpeed; out.grounded = false; }
-  out.boosting = input.jump && !out.boostLocked && out.fuel > JETPACK.fuelEpsilon && out.mantleTarget === 0;
-  const thrustTime = out.boosting ? Math.min(dt, out.fuel * JETPACK.boostSeconds) : 0;
+  // The first press is always an ordinary jump. A release in midair arms
+  // the second press-and-hold; simply holding the first press never boosts.
+  out.boostReady = previous.grounded ? false : (previous.boostReady ?? false);
+  if (!previous.grounded && previous.jumpHeld && !input.jump) out.boostReady = true;
+  if (launching) { out.vy = tuning.jumpSpeed * jetpack.jumpRatio; out.grounded = false; }
+  out.boosting = input.jump && !launching && out.boostReady && !out.boostLocked && out.fuel > JETPACK.fuelEpsilon && out.mantleTarget === 0;
+  const thrustTime = out.boosting ? Math.min(dt, out.fuel * jetpack.boostSeconds / jetpack.fuelBurnRate) : 0;
   if (out.boosting) {
-    out.fuel = Math.max(0, out.fuel - thrustTime / JETPACK.boostSeconds);
+    out.fuel = Math.max(0, out.fuel - thrustTime * jetpack.fuelBurnRate / jetpack.boostSeconds);
     if (out.fuel <= JETPACK.fuelEpsilon) { out.fuel = 0; out.boostLocked = true; }
   }
   out.jumpHeld = input.jump;
@@ -247,8 +271,8 @@ export function stepMotion(previous: Motion, input: Input, map: MapData, dt = TI
     out.grounded = out.y >= out.mantleTarget;
     if (out.grounded) out.mantleTarget = 0;
   } else {
-    out.vy = clamp(out.vy + (launching ? 0 : tuning.gravity * JETPACK.thrustGravityRatio * thrustTime) - tuning.gravity * dt,
-      -tuning.sprintSpeed * JETPACK.fallSprintRatio, tuning.sprintSpeed * JETPACK.ascentSprintRatio);
+    out.vy = clamp(out.vy + (launching ? 0 : tuning.gravity * jetpack.gravityRatio * jetpack.thrustGravityRatio * thrustTime) - tuning.gravity * jetpack.gravityRatio * dt,
+      -tuning.sprintSpeed * jetpack.fallSprintRatio, Math.max(out.vy, tuning.sprintSpeed * jetpack.ascentSprintRatio));
     out.y += out.vy * dt;
     out.grounded = false;
     const overBoard = onBoard(map, out.x, out.z);
@@ -299,7 +323,7 @@ export function stepMotion(previous: Motion, input: Input, map: MapData, dt = TI
   // Do not regenerate fuel on that first unsupported step off a ledge.
   if (out.grounded && !(Math.abs(out.y-map.ground)<.02 && onBoard(map,out.x,out.z))
     && !candidates.some(b => Math.abs(out.y-b.max[1])<.02 && touches(out.x,out.z,b,tuning.radius))) out.grounded=false;
-  if (out.grounded && !out.boosting) out.fuel = Math.min(1, out.fuel + dt / JETPACK.rechargeSeconds);
+  if (out.grounded && !out.boosting) out.fuel = Math.min(1, out.fuel + dt / jetpack.rechargeSeconds);
   return transitionEdge(out, rootMap, tuning);
 }
 

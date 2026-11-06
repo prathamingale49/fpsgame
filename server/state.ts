@@ -1,4 +1,16 @@
 import { schema, t, type SchemaType } from '@colyseus/schema';
+import { JETPACK } from '../shared/game.js';
+export const FlightTuning = schema({
+  boostSeconds: t.float64().default(JETPACK.boostSeconds),
+  fuelBurnRate: t.float64().default(JETPACK.fuelBurnRate),
+  rechargeSeconds: t.float64().default(JETPACK.rechargeSeconds),
+  thrustGravityRatio: t.float64().default(JETPACK.thrustGravityRatio),
+  ascentSprintRatio: t.float64().default(JETPACK.ascentSprintRatio),
+  fallSprintRatio: t.float64().default(JETPACK.fallSprintRatio),
+  airSpeedRatio: t.float64().default(JETPACK.airSpeedRatio),
+  gravityRatio: t.float64().default(JETPACK.gravityRatio),
+  jumpRatio: t.float64().default(JETPACK.jumpRatio),
+});
 
 export const PlayerState = schema({
   name: t.string().default('Engineer'),
@@ -10,7 +22,7 @@ export const PlayerState = schema({
   ads: t.boolean().default(false), sniperReloadAt: t.float64().default(0),
   side: t.string().default('front'), transitionCooldown: t.float32().default(0), flipCooldown: t.float32().default(0), headingOffset: t.float32().default(0),
   x: t.float32().default(0), y: t.float32().default(0), z: t.float32().default(0),
-  fuel: t.float32().default(1), boosting: t.boolean().default(false), boostLocked: t.boolean().default(false),
+  fuel: t.float32().default(1), boosting: t.boolean().default(false), boostLocked: t.boolean().default(false), boostReady: t.boolean().default(false),
   vy: t.float32().default(0), grounded: t.boolean().default(true), jumpHeld: t.boolean().default(false), mantleTarget: t.float32().default(0),
   yaw: t.float32().default(0), pitch: t.float32().default(0),
   hp: t.float32().default(100), ammo: t.uint8().default(30), reserve: t.uint16().default(60),
@@ -32,6 +44,7 @@ export const MatchState = schema({
   seconds: t.uint16().default(300),
   winner: t.string().default(''),
   mapId: t.string().default('test'),
+  flightTuning: FlightTuning,
   playerHeight: t.float32().default(1.8),
   serverTime: t.float64().default(0),
 }, 'MatchState');

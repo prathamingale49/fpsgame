@@ -1,20 +1,22 @@
 import { expect, it } from 'vitest';
 import fs from 'node:fs';
-import { initialMotion, JETPACK, PLAYER, stepMotion, testMap, TICK, transitionEdge, surfaceMap, type Input, type MapData, type Motion } from '../shared/game.js';
+import { initialMotion, validJetpackTuning, JETPACK, PLAYER, stepMotion, testMap, TICK, transitionEdge, surfaceMap, type Input, type MapData, type Motion } from '../shared/game.js';
+function launched() {return stepMotion(stepMotion(initialMotion([0,0,0]),{...idle,jump:true},empty),idle,empty);}
 const empty={...testMap,boxes:[],width:500,depth:500};
 const idle:Input={seq:1,forward:0,strafe:0,yaw:0,pitch:0,jump:false,sprint:false};
 function advance(m:Motion,count:number,input=idle,map:MapData=empty) {for(let i=0;i<count;i++)m=stepMotion(m,input,map);return m;}
 it('accelerates while held, caps ascent, and exhausts fuel in 2.5 seconds',()=>{
   const launch=stepMotion(initialMotion([0,0,0]),{...idle,jump:true},empty);
-  const next=stepMotion(launch,{...idle,jump:true},empty);
-  expect(next.vy).toBeGreaterThan(launch.vy);expect(next.fuel).toBeLessThan(launch.fuel!);
-  const spent=advance(initialMotion([0,0,0]),150,{...idle,jump:true});
+  const released=stepMotion(launch,idle,empty);
+  const next=stepMotion(released,{...idle,jump:true},empty);
+  expect(next.vy).toBeGreaterThan(released.vy);expect(next.fuel).toBeLessThan(launch.fuel!);
+  const spent=advance(launched(),150,{...idle,jump:true});
   expect(spent.y).toBeGreaterThan(30);expect(spent.fuel).toBe(0);expect(spent.boostLocked).toBe(true);
   expect(spent.vy).toBeLessThanOrEqual(PLAYER.sprintSpeed*JETPACK.ascentSprintRatio);
   const falling=advance(spent,120,{...idle,jump:true});expect(falling.boosting).toBe(false);expect(falling.vy).toBeLessThan(0);
 });
 it('releasing thrust preserves momentum, applies gravity and never recharges in midair',()=>{
-  const rising=advance(initialMotion([0,0,0]),30,{...idle,jump:true});
+  const rising=advance(launched(),30,{...idle,jump:true});
   const released=stepMotion(rising,idle,empty);
   expect(released.boosting).toBe(false);expect(released.vy).toBeCloseTo(rising.vy-PLAYER.gravity*TICK);
   expect(released.vy).toBeGreaterThan(0);expect(released.fuel).toBe(rising.fuel);
@@ -27,7 +29,8 @@ it('recharges on a real landing in three seconds, with no empty-engine fuel pump
   const charged=advance(landed,179);expect(charged.fuel).toBeCloseTo(1,5);
   const held=advance({...initialMotion([0,0,0]),fuel:0,jumpHeld:true,boostLocked:true},180,{...idle,jump:true});
   expect(held.grounded).toBe(true);expect(held.fuel).toBeCloseTo(1,5);expect(held.boosting).toBe(false);
-  const rearmed=stepMotion(held,idle,empty);expect(stepMotion(rearmed,{...idle,jump:true},empty).boosting).toBe(true);
+  const rearmed=stepMotion(held,idle,empty);const first=stepMotion(rearmed,{...idle,jump:true},empty);expect(first.boosting).toBe(false);
+  const release=stepMotion(first,idle,empty);expect(stepMotion(release,{...idle,jump:true},empty).boosting).toBe(true);
 });
 it('steers by yaw independently of pitch and limits sprint to the ground',()=>{
   const start={...initialMotion([0,10,0]),grounded:false};
@@ -39,7 +42,7 @@ it('steers by yaw independently of pitch and limits sprint to the ground',()=>{
 });
 it('cannot thrust through a ceiling or consume/recharge fuel during a board flip',()=>{
   const ceiling={...empty,boxes:[{min:[-3,3,-3] as [number,number,number],max:[3,4,3] as [number,number,number],climbable:true}]};
-  const stopped=advance(initialMotion([0,0,0]),120,{...idle,jump:true},ceiling);
+  const stopped=advance(launched(),120,{...idle,jump:true},ceiling);
   expect(stopped.y+PLAYER.height).toBeLessThanOrEqual(3+.001);
   const map={...empty,width:100,back:{enabled:true,thickness:1.6,boxes:[]}};
   let flip=transitionEdge({...initialMotion([51,2,0]),fuel:.4,boosting:true},map,PLAYER);
@@ -52,13 +55,13 @@ for(const id of ['bms','recovery','flight-sam']) for (const side of ['front','ba
   const box=surfaceMap(map,side).boxes.filter(b=>b.max[1]>=1 && b.max[1]<=18 && b.max[0]-b.min[0]>1 && b.max[2]-b.min[2]>1).sort((a,b)=>b.max[1]-a.max[1])[0];
   expect(box).toBeDefined();const x=(box.min[0]+box.max[0])/2,z=(box.min[2]+box.max[2])/2;
   // Start above the real component, boost, and return to its solid top.
-  let m:Motion={...initialMotion([x,box.max[1]+1,z]),grounded:false,side};
+  let m:Motion={...initialMotion([x,box.max[1]+1,z]),grounded:false,side,boostReady:true};
   m=advance(m,60,{...idle,jump:true},map);expect(m.y).toBeGreaterThan(box.max[1]+5);
   m=advance(m,300,idle,map);expect(m.grounded).toBe(true);expect(m.y).toBeGreaterThanOrEqual(box.max[1]-.01);expect(m.fuel).toBeGreaterThan(.6);
 });
 
 it('stops upward flight at the actual PCB underside',()=>{
-  const start={...initialMotion([0,-3,0]),grounded:false,vy:10};
+  const start={...initialMotion([0,-3,0]),grounded:false,vy:10,boostReady:true};
   const stopped=advance(start,90,{...idle,jump:true});
   expect(stopped.y+PLAYER.height).toBeLessThanOrEqual(-.45+.001);
 });
@@ -67,4 +70,22 @@ it('does not recharge on the first unsupported step off a component',()=>{
   const map={...empty,boxes:[{min:[-.1,0,-2] as [number,number,number],max:[.1,2,2] as [number,number,number]}]};
   const next=stepMotion({...initialMotion([.27,2,0]),fuel:.5},{...idle,strafe:1},map);
   expect(next.grounded).toBe(false);expect(next.fuel).toBe(.5);
+});
+
+it('keeps a held first press as a normal jump without using fuel',()=>{
+  let tap=initialMotion([0,0,0]),held=initialMotion([0,0,0]);
+  for(let i=0;i<100;i++) {
+    tap=stepMotion(tap,{...idle,jump:i===0},empty);
+    held=stepMotion(held,{...idle,jump:true},empty);
+    expect(held.y).toBeCloseTo(tap.y,8);expect(held.boosting).toBe(false);expect(held.fuel).toBe(1);
+  }
+});
+
+it('validates every demo parameter and applies custom fuel capacity in the shared solver',()=>{
+  const settings=validJetpackTuning({...JETPACK,boostSeconds:5})!;
+  expect(settings.boostSeconds).toBe(5);
+  for(const invalid of [{...settings,boostSeconds:0},{...settings,fuelBurnRate:0},{...settings,gravityRatio:Infinity},{boostSeconds:5}]) expect(validJetpackTuning(invalid)).toBeNull();
+  let m=launched();
+  for(let i=0;i<150;i++)m=stepMotion(m,{...idle,jump:true},empty,TICK,undefined,PLAYER,settings);
+  expect(m.fuel).toBeCloseTo(.5,5);expect(m.boosting).toBe(true);
 });

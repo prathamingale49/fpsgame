@@ -2,7 +2,7 @@ import * as THREE from 'three';
 import { PRACTICE_MAPS } from '../shared/maps';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 import { Client, type Room } from '@colyseus/sdk';
-import { JETPACK, nearestFlipEdge, aimRay, collisionCacheStats, movementYaw, samplePosition, hitscan, COMBAT, DEV_SCALE, EDGE_FLIP_SECONDS, FLIP_COOLDOWN_SECONDS, JUMP_HEIGHT_RATIO, PLAYER, initialMotion, MOVEMENT_PROTOCOL, stepMotion, testMap, TICK, WEAPON, tuningForHeight, type Input, type MapData, type Motion, type BoardSide, type PositionSample, type ShotInput } from '../shared/game';
+import { FLIGHT_CONTROLS, validJetpackTuning, type JetpackTuning, JETPACK, nearestFlipEdge, aimRay, collisionCacheStats, movementYaw, samplePosition, hitscan, COMBAT, DEV_SCALE, EDGE_FLIP_SECONDS, FLIP_COOLDOWN_SECONDS, JUMP_HEIGHT_RATIO, PLAYER, initialMotion, MOVEMENT_PROTOCOL, stepMotion, testMap, TICK, WEAPON, tuningForHeight, type Input, type MapData, type Motion, type BoardSide, type PositionSample, type ShotInput } from '../shared/game';
 import type { MatchState, PlayerState } from '../server/state';
 import './style.css';
 import { validWeaponId, WEAPONS, WEAPON_IDS, CHARGE, HEAT, type WeaponId } from '../shared/weapons';
@@ -58,7 +58,7 @@ let specialHeld = false, fullChargeCue = false;
 const currentWeapon = () => WEAPONS[(room?.state.players?.get(room.sessionId)?.weapon ?? 'solder') as WeaponId];
 const weaponShot = (): ShotInput => ({ shotId: ++nextShotId, seq, yaw, pitch, viewTime: lastViewTime || undefined });
 function cancelSpecial() { specialHeld = false; fullChargeCue = false; if (room) room.send('weapon:trigger', { action: 'cancel' }); }
-const canvas = el<HTMLCanvasElement>('game');
+const canvas = el<HTMLCanvasElement>('game'); canvas.tabIndex = 0;
 const renderer = new THREE.WebGLRenderer({ canvas, antialias: true, powerPreference: 'high-performance' });
 let quality = localStorage.getItem('pcb-quality') || 'balanced';
 const applyQuality = () => renderer.setPixelRatio(Math.min(devicePixelRatio, quality === 'high' ? 1.5 : quality === 'low' ? .75 : 1));
@@ -79,6 +79,7 @@ const playerMaterials = ['#dd704e', '#82cddd', '#c9dc6b', '#c999e6', '#f3c669', 
 let map: MapData = testMap;
 let room: Room<MatchState> | null = null;
 let local: Motion = initialMotion(testMap.spawns[0]);
+let flightTuning: JetpackTuning = validJetpackTuning(JETPACK)!;
 let playerTuning = tuningForHeight(PLAYER.height);
 let devScaleEnabled = false;
 let lastSentInput: Input | null = null;
@@ -126,20 +127,46 @@ let correction = 0, collisionChecks = 0, ping = 0;
 const debug = document.createElement('div'); debug.id = 'perf-debug'; debug.hidden = true; el('app').append(debug);
 const scalePanel = document.createElement('aside');
 scalePanel.id = 'scale-debug'; scalePanel.hidden = true;
-scalePanel.innerHTML = `<div class="scale-debug-header"><strong>DEV · PLAYER SCALE</strong><button id="scale-close" type="button">×</button></div>
+scalePanel.innerHTML = `<div class="scale-debug-header"><strong>DEMO · MOVEMENT LAB</strong><button id="scale-close" type="button">×</button></div>
   <label for="scale-height">PLAYER HEIGHT <output id="scale-value">${PLAYER.height.toFixed(2)} mm</output></label>
   <input id="scale-height" type="range" min="${DEV_SCALE.min}" max="${DEV_SCALE.max}" step="${DEV_SCALE.step}" value="${PLAYER.height}">
   <div id="scale-metrics"></div>
   <p>Shared by the entire room. Jump apex and movement speed scale with player height. Release the slider to apply.</p>
   <button id="scale-resume" type="button">CLOSE &amp; RESUME</button>`;
 el('app').append(scalePanel);
+const flightControls = document.createElement('fieldset'); flightControls.id = 'flight-controls';
+flightControls.innerHTML = '<legend>ROCKET FLIGHT</legend>' + FLIGHT_CONTROLS.map(c => `<label for="flight-${c.key}">${c.label}<output id="flight-value-${c.key}"></output></label><input id="flight-${c.key}" type="range" min="${c.min}" max="${c.max}" step="${c.step}" value="${JETPACK[c.key]}">`).join('') + '<p id="flight-metrics"></p><button id="flight-reset" type="button">RESET FLIGHT</button> <button id="flight-copy" type="button">COPY SETTINGS</button><p>Saved in this browser. Changes apply to everyone in this demo room.</p>';
+el('scale-resume').before(flightControls);
+function updateFlightReadout(settings: JetpackTuning, syncSliders = false) {
+  for (const control of FLIGHT_CONTROLS) {
+    el(`flight-value-${control.key}`).textContent = `${settings[control.key].toFixed(2)} ${control.unit}`;
+    if (syncSliders) el<HTMLInputElement>(`flight-${control.key}`).value = String(settings[control.key]);
+  }
+  el('flight-metrics').textContent = `BOOST ${(settings.boostSeconds/settings.fuelBurnRate).toFixed(2)}s · RECHARGE ${(100/settings.rechargeSeconds).toFixed(1)}%/s · THRUST ${(playerTuning.gravity*settings.gravityRatio*settings.thrustGravityRatio).toFixed(1)} mm/s² · UP ${(playerTuning.sprintSpeed*settings.ascentSprintRatio).toFixed(1)} mm/s · FALL ${(playerTuning.sprintSpeed*settings.fallSprintRatio).toFixed(1)} mm/s`;
+}
+function submitFlightSettings(settings: JetpackTuning) {
+  if (!room || !devScaleEnabled) return;
+  localStorage.setItem('pcb-flight-tuning', JSON.stringify(settings)); room.send('dev:flight', settings);
+}
+for (const control of FLIGHT_CONTROLS) {
+  const slider = el<HTMLInputElement>(`flight-${control.key}`);
+  slider.oninput = () => {
+    const settings = Object.fromEntries(FLIGHT_CONTROLS.map(c => [c.key,Number(el<HTMLInputElement>(`flight-${c.key}`).value)])) as JetpackTuning;
+    updateFlightReadout(settings); updateScaleReadout(playerTuning.height,settings); submitFlightSettings(settings);
+  };
+}
+el('flight-reset').onclick = () => { const defaults=validJetpackTuning(JETPACK)!; updateFlightReadout(defaults,true); submitFlightSettings(defaults); };
+el('flight-copy').onclick = () => { void navigator.clipboard.writeText(JSON.stringify(flightTuning,null,2)).then(()=>showFeed('FLIGHT SETTINGS COPIED')); };
+updateFlightReadout(flightTuning,true);
 const scaleSlider = el<HTMLInputElement>('scale-height');
 const scaleValue = el<HTMLOutputElement>('scale-value');
 const scaleMetrics = el<HTMLDivElement>('scale-metrics');
-function updateScaleReadout(height: number) {
+function updateScaleReadout(height: number, settings: JetpackTuning = flightTuning) {
   const tuning = tuningForHeight(height);
   scaleValue.textContent = `${height.toFixed(2)} mm`;
-  scaleMetrics.textContent = `JUMP APEX ${(height * JUMP_HEIGHT_RATIO).toFixed(2)} mm (${JUMP_HEIGHT_RATIO.toFixed(2)}× height) · SPRINT ${tuning.sprintSpeed.toFixed(1)} mm/s · HITBOX ${(tuning.radius * 2).toFixed(2)} mm`;
+  const gravity=tuning.gravity*settings.gravityRatio, impulse=tuning.jumpSpeed*settings.jumpRatio;
+  const apex=(impulse-gravity*TICK/2)**2/(2*gravity);
+  scaleMetrics.textContent = `JUMP APEX ${apex.toFixed(2)} mm (${(apex/height).toFixed(2)}× height) · SPRINT ${tuning.sprintSpeed.toFixed(1)} mm/s · HITBOX ${(tuning.radius * 2).toFixed(2)} mm`;
 }
 updateScaleReadout(PLAYER.height);
 scaleSlider.addEventListener('input', () => updateScaleReadout(Number(scaleSlider.value)));
@@ -151,6 +178,7 @@ function applyPlayerHeight(height: number) {
   playerTuning = tuningForHeight(height);
   scaleSlider.value = height.toFixed(2);
   updateScaleReadout(height);
+  updateFlightReadout(flightTuning);
   gunView.scale.setScalar(.75 * height / 1.8);
   remotes.forEach(entry => entry.mesh.scale.setScalar(height / 2.48));
 }
@@ -178,7 +206,7 @@ function sceneResources() {
   scene: sceneResources(), gpu, mapId: map.id, authoritativeMapId: room?.state.mapId,
   cache: collisionCacheStats(map), heapMB: ((performance as Performance & { memory?: { usedJSHeapSize: number } }).memory?.usedJSHeapSize ?? 0) / 1048576,
   grounded: local.grounded, vy: local.vy, boostingRemotes: [...remotes].filter(([,entry]) => entry.flight.exhaust.visible).map(([id]) => id),
-  fuel: local.fuel, boosting: local.boosting, authoritativeFuel: room?.state?.players?.get(room.sessionId)?.fuel,
+  flightTuning: { ...flightTuning }, fuel: local.fuel, boosting: local.boosting, authoritativeFuel: room?.state?.players?.get(room.sessionId)?.fuel,
   position: [local.x, local.y, local.z], authoritative: room?.state?.players?.get(room.sessionId) ? [room.state.players!.get(room.sessionId)!.x, room.state.players!.get(room.sessionId)!.y, room.state.players!.get(room.sessionId)!.z] : null,
   side: local.side ?? 'front', authoritativeSide: room?.state?.players?.get(room.sessionId)?.side,
   testRemaining: testMove?.remaining ?? 0,
@@ -479,6 +507,12 @@ function syncState(state: MatchState) {
     movementSnapshots.push({ time: performance.now(), players: [...state.players.entries()].map(([id, p]) => ({ id, ack: p.ack, side: p.side, position: [p.x, p.y, p.z] as [number, number, number] })) });
     if (movementSnapshots.length > 4000) movementSnapshots.shift();
   }
+  if (state.flightTuning) {
+    const settings = validJetpackTuning(state.flightTuning);
+    if (settings && FLIGHT_CONTROLS.some(c => settings[c.key] !== flightTuning[c.key])) {
+      flightTuning = settings; pending = []; updateFlightReadout(settings,true); updateScaleReadout(playerTuning.height);
+    }
+  }
   snapshot = state;
   if (state.serverTime > 0) {
     // Clock synchronization is based on server-authored snapshot timestamps and
@@ -492,9 +526,9 @@ function syncState(state: MatchState) {
     if (me.reloading && !wasReloading) sound(570, .22, 'triangle');
     wasReloading = me.reloading;
     const before = local;
-    const authoritative: Motion = { x: me.x, y: me.y, z: me.z, vy: me.vy, grounded: me.grounded, jumpHeld: me.jumpHeld, mantleTarget: me.mantleTarget, fuel: me.fuel, boosting: me.boosting, boostLocked: me.boostLocked, side: me.side as BoardSide, transitionCooldown: me.transitionCooldown, flipCooldown: me.flipCooldown, headingOffset: me.headingOffset };
+    const authoritative: Motion = { x: me.x, y: me.y, z: me.z, vy: me.vy, grounded: me.grounded, jumpHeld: me.jumpHeld, mantleTarget: me.mantleTarget, fuel: me.fuel, boosting: me.boosting, boostLocked: me.boostLocked, boostReady: me.boostReady, side: me.side as BoardSide, transitionCooldown: me.transitionCooldown, flipCooldown: me.flipCooldown, headingOffset: me.headingOffset };
     pending = pending.filter(input => input.seq > me.ack);
-    local = pending.reduce((motion, input) => stepMotion(motion, input, map, TICK, undefined, playerTuning), authoritative);
+    local = pending.reduce((motion, input) => stepMotion(motion, input, map, TICK, undefined, playerTuning, flightTuning), authoritative);
     correction = Math.hypot(local.x - before.x, local.y - before.y, local.z - before.z);
     maxCorrection = Math.max(maxCorrection, correction);
     if (me.alive && before.y >= map.ground - 1 && Math.abs(before.y - me.y) < 10) {
@@ -563,6 +597,7 @@ async function connect(mode: 'play' | 'create' | 'join' | 'reconnect' | 'practic
     el('room-label').style.pointerEvents = 'auto'; el('room-label').style.cursor = 'pointer';
     history.replaceState(null, '', `?room=${room.roomId}`);
     room.onStateChange(syncState);
+    if (devScaleEnabled) { try { const saved = validJetpackTuning(JSON.parse(localStorage.getItem('pcb-flight-tuning') ?? 'null')); if (saved) room.send('dev:flight',saved); } catch { /* invalid saved settings */ } }
     room.onMessage('elimination', (msg: { name: string; chain: number }) => showElimination(msg));
     room.onMessage('feed', (msg: { text: string; chain?: number }) => showFeed(msg.text, msg.chain));
     room.onMessage('shot', (msg: { shooter: string; shotId?: number; weapon?: WeaponId; side: BoardSide; from: number[]; to: number[]; hit?: string }) => {
@@ -599,7 +634,7 @@ async function connect(mode: 'play' | 'create' | 'join' | 'reconnect' | 'practic
     toggleMaps(false); mapsButton.hidden = !room.state.practice;
     for (const button of Array.from(el('map-options').querySelectorAll('button'))) button.setAttribute('aria-pressed', String(button.dataset.mapId === map.id));
     el('menu').classList.add('hidden'); el('hud').classList.remove('hidden');
-    if (devScaleEnabled) showFeed('DEV SCALE enabled · press F4 to adjust height');
+    if (devScaleEnabled) showFeed('DEMO MODE · F4 opens jump and rocket tuning');
     if (mode === 'reconnect') el('pause').classList.remove('hidden'); else void canvas.requestPointerLock();
   } catch (error) { if (mode === 'reconnect') sessionStorage.removeItem('pcb-reconnection-token'); el('error').textContent = error instanceof Error ? error.message : String(error); }
 }
@@ -614,7 +649,7 @@ document.addEventListener('keydown', e => {
 });
 el('leave').onclick = () => { sessionStorage.removeItem('pcb-reconnection-token'); room?.leave(); };
 el('room-label').onclick = () => { if (!room) return; navigator.clipboard.writeText(location.href).then(() => showFeed('Invite link copied')); };
-el('controls-toggle').onclick = () => { el('menu-detail').classList.remove('hidden'); el('menu-detail').innerHTML = 'WASD move · Mouse aim · Click shoot · Hold Space rocket thrust · Shift ground sprint · R reload · Tab scoreboard · Esc pause'; };
+el('controls-toggle').onclick = () => { el('menu-detail').classList.remove('hidden'); el('menu-detail').innerHTML = 'WASD move · Mouse aim · Click shoot · Space jump · Release then hold Space again to boost · Shift ground sprint · R reload · Tab scoreboard · Esc pause'; };
 el('settings-toggle').onclick = () => {
   el('menu-detail').classList.remove('hidden');
   el('menu-detail').innerHTML = `<label for="sensitivity">MOUSE SENSITIVITY</label><input id="sensitivity" type="range" min=".0008" max=".005" step=".0001" value="${sensitivity}"><label for="volume">SOUND VOLUME</label><input id="volume" type="range" min="0" max="1" step=".05" value="${volume}"><label for="quality">GRAPHICS QUALITY</label><select id="quality"><option value="low">Performance</option><option value="balanced">Balanced</option><option value="high">High</option></select>`;
@@ -625,7 +660,7 @@ el('settings-toggle').onclick = () => {
 };
 const invite = new URLSearchParams(location.search).get('room'); if (invite) el<HTMLInputElement>('code').value = invite.toUpperCase();
 if (sessionStorage.getItem('pcb-reconnection-token')) void connect('reconnect');
-document.addEventListener('keydown', e => { keys.add(e.code); if (e.code === 'F3') { e.preventDefault(); showDebug = !showDebug; debug.hidden = !showDebug; fpsFrames = 0; fpsStart = performance.now(); } if (e.code === 'F4' && devScaleEnabled && room && !e.repeat) { e.preventDefault(); scalePanel.hidden = !scalePanel.hidden; if (!scalePanel.hidden && document.pointerLockElement === canvas) document.exitPointerLock(); } if (e.code === 'Tab') { e.preventDefault(); el('scoreboard').classList.remove('hidden'); } if (e.code === 'KeyR' && room && !e.repeat) room.send('reload'); });
+document.addEventListener('keydown', e => { keys.add(e.code); if (e.code === 'F3') { e.preventDefault(); showDebug = !showDebug; debug.hidden = !showDebug; fpsFrames = 0; fpsStart = performance.now(); } if (e.code === 'F4' && devScaleEnabled && room && !e.repeat) { e.preventDefault(); scalePanel.hidden = !scalePanel.hidden; if (!scalePanel.hidden) el('pause').classList.add('hidden'); if (!scalePanel.hidden && document.pointerLockElement === canvas) document.exitPointerLock(); } if (e.code === 'Tab') { e.preventDefault(); el('scoreboard').classList.remove('hidden'); } if (e.code === 'KeyR' && room && !e.repeat) room.send('reload'); });
 document.addEventListener('keyup', e => { keys.delete(e.code); if (e.code === 'Tab') el('scoreboard').classList.add('hidden'); });
 document.addEventListener('mousemove', e => { if (document.pointerLockElement !== canvas) return; yaw -= e.movementX * sensitivity; pitch = Math.max(-1.4, Math.min(1.4, pitch - e.movementY * sensitivity)); });
 let adsHeld = false, adsZoom = 0, adsSent = false;
@@ -644,7 +679,7 @@ document.addEventListener('mouseup', e => {
   if (specialHeld && currentWeapon().id === 'iron') { room?.send('weapon:trigger', { action: 'release', shot: weaponShot() }); specialHeld = false; fullChargeCue = false; gunView.position.z = -.15; sound(130, .12); }
   else cancelSpecial();
 });
-document.addEventListener('pointerlockchange', () => { el('pause').classList.toggle('hidden', !room || !mapsSidebar.hidden || document.pointerLockElement === canvas); keys.clear(); mouseDown = false; });
+document.addEventListener('pointerlockchange', () => { if (document.pointerLockElement === canvas) canvas.focus(); el('pause').classList.toggle('hidden', !room || !mapsSidebar.hidden || !scalePanel.hidden || document.pointerLockElement === canvas); keys.clear(); mouseDown = false; });
 window.addEventListener('blur', () => { keys.clear(); mouseDown = false; });
 window.addEventListener('blur', cancelSpecial);
 window.addEventListener('blur', () => updateFlightAudio(false));
@@ -691,7 +726,7 @@ setInterval(() => {
   if (repeatedIdle) return;
   seq++; lastSentInput = input;
   const stats = { collisionChecks: 0 };
-  local = stepMotion(local, input, map, TICK, stats, playerTuning); collisionChecks += stats.collisionChecks;
+  local = stepMotion(local, input, map, TICK, stats, playerTuning, flightTuning); collisionChecks += stats.collisionChecks;
   pending.push(input); if (pending.length > 2048) pending.shift();
   maxPending = Math.max(maxPending, pending.length);
   room.send('input', input);

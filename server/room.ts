@@ -1,9 +1,9 @@
 import { KillChain } from './kill-chain.js';
 import { Room, type Client } from 'colyseus';
-import { MatchState, PlayerState, PickupState, WeaponPickupState } from './state.js';
+import { FlightTuning, MatchState, PlayerState, PickupState, WeaponPickupState } from './state.js';
 import { ammoPickupAmount, WEAPONS, validWeaponId, ironDamage, sniperAim, pumpRays, weaponHits, weaponKillMessage, HEAT, type WeaponId } from '../shared/weapons.js';
 import { weaponPickupLocations, droppedWeaponPosition, canCollectWeapon, WEAPON_PICKUPS } from '../shared/weapon-pickups.js';
-import { JETPACK, onBoard, aimRay, movementYaw, collisionCacheStats, hitscan, initialMotion, samplePosition, stepMotion, testMap, TICK, MOVEMENT_PROTOCOL, MATCH_SECONDS, RESPAWN_SECONDS, PLAYER, WEAPON, COMBAT, tuningForHeight, validDevHeight, validInput, validShotInput, type Input, type ShotInput, type PositionSample, type MapData, type Motion, type PlayerTuning, type BoardSide } from '../shared/game.js';
+import { validJetpackTuning, type JetpackTuning, JETPACK, onBoard, aimRay, movementYaw, collisionCacheStats, hitscan, initialMotion, samplePosition, stepMotion, testMap, TICK, MOVEMENT_PROTOCOL, MATCH_SECONDS, RESPAWN_SECONDS, PLAYER, WEAPON, COMBAT, tuningForHeight, validDevHeight, validInput, validShotInput, type Input, type ShotInput, type PositionSample, type MapData, type Motion, type PlayerTuning, type BoardSide } from '../shared/game.js';
 const PLAYER_PICKUP_DISTANCE = .9;
 const TRACE_MOVEMENT = process.env.PCB_MOVEMENT_TRACE === '1';
 export const DEV_SCALE_ENABLED = process.env.PCB_DEV_SCALE === '1' && process.env.NODE_ENV !== 'production';
@@ -50,7 +50,7 @@ export class GameRoom extends Room {
   }
   private bots = new Map<string, { mode: number; next: number; yaw: number; moving: boolean; sprint: boolean }>();
   maxClients = 8;
-  state = new MatchState();
+  state = new MatchState({flightTuning:new FlightTuning()});
   private killChain = new KillChain();
   private runtime = new Map<string, Runtime>();
   private hitHistory = new Map<string, PositionSample[]>();
@@ -62,6 +62,7 @@ export class GameRoom extends Room {
   private readonly matchSeconds = Number(process.env.PCB_TEST_MATCH_SECONDS || MATCH_SECONDS);
   private readonly pickupSeconds = Number(process.env.PCB_TEST_PICKUP_SECONDS || WEAPON.pickupRespawnSeconds);
   private playerTuning: PlayerTuning = PLAYER;
+  private jetpackTuning: JetpackTuning = { ...JETPACK };
 
   onCreate(options: { mapId?: string; private?: boolean } = {}) {
     this.map = this.practice ? practiceMaps.get(options.mapId ?? "bms") ?? activeMap : chooseMultiplayerMap();
@@ -157,6 +158,14 @@ export class GameRoom extends Room {
       if (p) p.ads = value === true && p.alive && p.connected && p.weapon === 'sniper' && !p.reloading && p.transitionCooldown <= 0;
     });
     this.onMessage('reload', (client) => this.reload(client.sessionId));
+    this.onMessage('dev:flight', (client, value: unknown) => {
+      if (!DEV_SCALE_ENABLED || !this.runtime.has(client.sessionId)) return;
+      const settings = validJetpackTuning(value); if (!settings) return;
+      this.jetpackTuning = settings;
+      Object.assign(this.state.flightTuning, settings);
+      this.runtime.forEach((r,id) => { r.queue.clear(); r.credit=0; r.lastSeq=r.lastReceived; const p=this.state.players.get(id); if(p) p.ack=r.lastSeq; });
+      this.broadcast('feed', {text:'DEMO FLIGHT SETTINGS UPDATED'});
+    });
     this.onMessage('dev:scale', (client, payload: unknown) => {
       if (!DEV_SCALE_ENABLED || !this.runtime.has(client.sessionId)) return;
       const value = payload && typeof payload === 'object' ? (payload as { height?: unknown }).height : undefined;
@@ -227,7 +236,7 @@ export class GameRoom extends Room {
         p.x = motion.x; p.y = motion.y; p.z = motion.z; p.vy = motion.vy; p.grounded = true;
         p.side = 'front'; p.transitionCooldown = 0; p.flipCooldown = 0; p.headingOffset = 0;
       }
-      p.fuel = 1; p.boosting = false; p.boostLocked = false;
+      p.fuel = 1; p.boosting = false; p.boostLocked = false; p.boostReady = false;
       p.jumpHeld = false; p.mantleTarget = 0; p.sniperReloadAt = 0; p.ads = false;
       p.weapon = 'solder'; p.specialWeapon = ''; p.heat = 0; p.overheated = false; p.triggerHeld = false; p.chargeStarted = 0; p.weaponReadyAt = 0;
       p.kills = 0; p.deaths = 0; p.hp = 100; p.alive = true; p.ammo = WEAPON.magazine; p.reserve = WEAPON.reserve; p.reloading = false;
@@ -238,10 +247,10 @@ export class GameRoom extends Room {
   }
 
   private movePlayer(p: PlayerState, input: Input) {
-    const motion = stepMotion({ x: p.x, y: p.y, z: p.z, vy: p.vy, grounded: p.grounded, jumpHeld: p.jumpHeld, mantleTarget: p.mantleTarget, fuel: p.fuel, boosting: p.boosting, boostLocked: p.boostLocked, side: p.side as BoardSide, transitionCooldown: p.transitionCooldown, flipCooldown: p.flipCooldown, headingOffset: p.headingOffset }, input, this.map, TICK, undefined, this.playerTuning);
+    const motion = stepMotion({ x: p.x, y: p.y, z: p.z, vy: p.vy, grounded: p.grounded, jumpHeld: p.jumpHeld, mantleTarget: p.mantleTarget, fuel: p.fuel, boosting: p.boosting, boostLocked: p.boostLocked, boostReady: p.boostReady, side: p.side as BoardSide, transitionCooldown: p.transitionCooldown, flipCooldown: p.flipCooldown, headingOffset: p.headingOffset }, input, this.map, TICK, undefined, this.playerTuning, this.jetpackTuning);
     p.x = motion.x; p.y = motion.y; p.z = motion.z; p.vy = motion.vy; p.grounded = motion.grounded; p.jumpHeld = motion.jumpHeld; p.mantleTarget = motion.mantleTarget;
     p.side = motion.side ?? 'front'; p.transitionCooldown = motion.transitionCooldown ?? 0; p.flipCooldown = motion.flipCooldown ?? 0; p.headingOffset = motion.headingOffset ?? 0;
-    p.fuel = motion.fuel ?? 1; p.boosting = motion.boosting ?? false; p.boostLocked = motion.boostLocked ?? false;
+    p.fuel = motion.fuel ?? 1; p.boosting = motion.boosting ?? false; p.boostLocked = motion.boostLocked ?? false; p.boostReady = motion.boostReady ?? false;
   }
 
   private tick() {
@@ -316,7 +325,9 @@ export class GameRoom extends Room {
         && (!p.grounded || p.fuel < 1 || p.boosting || p.transitionCooldown > 0)) {
         r.credit = Math.min(r.credit, 6);
         while (r.credit >= 1 && p.alive) {
+          const boostReady=p.boostReady;
           this.movePlayer(p, {seq:r.lastSeq, forward:0, strafe:0, yaw:p.yaw, pitch:p.pitch, jump:false, sprint:false});
+          p.boostReady=boostReady; // A missing packet is not a deliberate second tap.
           r.credit--;
           if (p.y < this.map.ground-PLAYER.fallDeathDepth) this.fall(id,now);
         }
@@ -441,7 +452,7 @@ export class GameRoom extends Room {
     this.hitHistory.delete(id);
     const spawn = p.npc ? this.botSpawn(Number(id.slice(4))) : this.map.spawns[this.spawnIndex++ % this.map.spawns.length];
     const m = initialMotion(spawn);
-    p.x = m.x; p.y = m.y; p.z = m.z; p.vy = 0; p.fuel = 1; p.boosting = false; p.boostLocked = false; p.grounded = true; p.jumpHeld = false; p.mantleTarget = 0;
+    p.x = m.x; p.y = m.y; p.z = m.z; p.vy = 0; p.fuel = 1; p.boosting = false; p.boostLocked = false; p.boostReady = false; p.grounded = true; p.jumpHeld = false; p.mantleTarget = 0;
     p.side = 'front'; p.transitionCooldown = 0; p.flipCooldown = 0; p.headingOffset = 0;
     this.cancelWeapon(id); this.weapons.delete(id); p.weapon = 'solder'; p.specialWeapon = ''; p.heat = 0; p.overheated = false; p.weaponReadyAt = 0; p.sniperReloadAt = 0; p.ads = false;
     p.hp = 100; p.alive = true; p.ammo = WEAPON.magazine; p.reserve = WEAPON.reserve; p.reloading = false;
