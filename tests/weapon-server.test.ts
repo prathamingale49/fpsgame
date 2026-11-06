@@ -43,7 +43,7 @@ it('aggregates eight pump pellets and preserves ammo/cooldown across switching a
   await select(r, 'pump'); expect(human(r).ammo).toBe(5);
   r.send('reload'); await wait(() => human(r).reloading); await select(r, 'iron'); expect(human(r).reloading).toBe(false);
   await select(r, 'pump'); expect(human(r).ammo).toBe(5);
-  r.send('reload'); await wait(() => human(r).ammo === 6 && !human(r).reloading, 3000); expect(human(r).reserve).toBe(35);
+  r.send('reload'); await wait(() => human(r).ammo === 6 && !human(r).reloading, 3000); expect(human(r).reserve).toBe(11);
 });
 it('fires sniper instantly for 100, automatically recharges and cannot bypass recharge by switching', async () => {
   const r = await open(); await select(r, 'sniper');

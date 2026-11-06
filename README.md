@@ -2,6 +2,8 @@
 
 Solo Practice is an unrestricted weapon sandbox with all five guns available using **1–5**. It has five rocket targets and remains private and untimed. Use **MAPS** on the left or **M** to switch between BMS, Recovery, and Vespula Flight SAM inside practice. **R** reloads; **F5** toggles target hitboxes and **F6** freezes NPCs.
 
+Ammo spools are collected automatically for the equipped weapon: **+30 Blaster**, **+5 Iron**, or **+6 Pump** reserve rounds, capped at **120 / 20 / 24**. Iron starts with **5 + 10** rounds and Pump with **6 + 12**; Blaster remains **30 + 60**. Full reserves, Hot Air, and the self-recharging Sniper leave the spool available. Ammo spools respawn after **20 seconds**.
+
 Normal multiplayer starts every player with the **Solder Blaster** and randomly spawns eleven special weapon pickups (three Precision Irons, three Hot Air Rework Guns, three Desoldering Pumps, and two Capacitor Snipers) across clear, accessible areas of the PCB. The pickups are spread apart rather than clustered, including both PCB surfaces. Press **E** near a floating pickup to collect or replace the one carried special weapon; press **Q** to swap between the permanent Blaster and that special. Pickups respawn after 15 seconds, and death clears the carried special. Weapon locations vary between matches/rooms.
 
 The five weapons have distinct procedural models and animations: Blaster recoil/heated barrel, charged Iron pullback and violet coils, Hot Air turbine/heat glow, and Pump plunger action. Iron charges while held; Hot Air uses a short-range cone and can overheat; Pump fires eight pellets. Weapon selection, damage, charges, cooling, cooldowns, reloads, and pickups are server-validated for multiplayer. Weapon animation does not alter bullet aim.

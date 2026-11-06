@@ -2,12 +2,17 @@ import { WEAPON, aimRay, hitscan, rayBox, surfaceMap, COMBAT, type Ray, type Mot
 
 export const WEAPONS = {
   solder: { ...WEAPON, id: 'solder', mode: 'auto' },
-  iron: { id: 'iron', name: 'Precision Iron', mode: 'charge', damage: 25, magazine: 5, reserve: 30, fireInterval: .8, reloadSeconds: 2.5, range: 150 },
-  sniper: { id: 'sniper', name: 'Capacitor Sniper', mode: 'single', damage: 100, magazine: 1, reserve: 1, fireInterval: .15, reloadSeconds: 2.5, range: 150 },
-  air: { id: 'air', name: 'Hot Air Rework Gun', mode: 'heat', damage: 10, magazine: 0, reserve: 0, fireInterval: .1, reloadSeconds: 0, range: 5 },
-  pump: { id: 'pump', name: 'Desoldering Pump', mode: 'pellets', damage: 12, magazine: 6, reserve: 36, fireInterval: 1, reloadSeconds: 2, range: 12 },
+  iron: { id: 'iron', name: 'Precision Iron', mode: 'charge', damage: 25, magazine: 5, reserve: 10, maxReserve: 20, pickupRounds: 5, fireInterval: .8, reloadSeconds: 2.5, range: 150 },
+  sniper: { id: 'sniper', name: 'Capacitor Sniper', mode: 'single', damage: 100, magazine: 1, reserve: 1, maxReserve: 1, pickupRounds: 0, fireInterval: .15, reloadSeconds: 2.5, range: 150 },
+  air: { id: 'air', name: 'Hot Air Rework Gun', mode: 'heat', damage: 10, magazine: 0, reserve: 0, maxReserve: 0, pickupRounds: 0, fireInterval: .1, reloadSeconds: 0, range: 5 },
+  pump: { id: 'pump', name: 'Desoldering Pump', mode: 'pellets', damage: 12, magazine: 6, reserve: 12, maxReserve: 24, pickupRounds: 6, fireInterval: 1, reloadSeconds: 2, range: 12 },
 } as const;
 export type WeaponId = keyof typeof WEAPONS;
+/** Reserve-only spool grant; zero leaves the pickup available. */
+export function ammoPickupAmount(id: WeaponId, reserve: number): number {
+  const config = WEAPONS[id];
+  return Number.isFinite(reserve) ? Math.max(0, Math.min(config.pickupRounds, config.maxReserve - reserve)) : 0;
+}
 export function weaponKillMessage(id: WeaponId, attacker: string, target: string): string {
   const verb = { solder: 'reflowed', iron: 'soldered', air: 'heat-gunned', pump: 'desoldered', sniper: 'shorted' }[id];
   return `${attacker} ${verb} ${target} with a ${WEAPONS[id].name}`;

@@ -1,7 +1,7 @@
 import { KillChain } from './kill-chain.js';
 import { Room, type Client } from 'colyseus';
 import { MatchState, PlayerState, PickupState, WeaponPickupState } from './state.js';
-import { WEAPONS, validWeaponId, ironDamage, sniperAim, pumpRays, weaponHits, weaponKillMessage, HEAT, type WeaponId } from '../shared/weapons.js';
+import { ammoPickupAmount, WEAPONS, validWeaponId, ironDamage, sniperAim, pumpRays, weaponHits, weaponKillMessage, HEAT, type WeaponId } from '../shared/weapons.js';
 import { weaponPickupLocations, droppedWeaponPosition, canCollectWeapon, WEAPON_PICKUPS } from '../shared/weapon-pickups.js';
 import { onBoard, aimRay, movementYaw, collisionCacheStats, hitscan, initialMotion, samplePosition, stepMotion, testMap, TICK, MOVEMENT_PROTOCOL, MATCH_SECONDS, RESPAWN_SECONDS, PLAYER, WEAPON, COMBAT, tuningForHeight, validDevHeight, validInput, validShotInput, type Input, type ShotInput, type PositionSample, type MapData, type Motion, type PlayerTuning, type BoardSide } from '../shared/game.js';
 const PLAYER_PICKUP_DISTANCE = .9;
@@ -307,11 +307,14 @@ export class GameRoom extends Room {
       serverPerf.queueTotal += r.queue.size;
       if (!r.queue.size) r.credit = Math.min(r.credit, 6);
       if (!p.alive) return;
-      if (p.weapon === 'solder' && p.reserve < WEAPON.maxReserve) this.state.pickups.forEach((pickup, pickupId) => {
+      const equipped = validWeaponId(p.weapon) ? p.weapon : undefined;
+      if (equipped) this.state.pickups.forEach((pickup, pickupId) => {
         if (pickup.side !== p.side || !pickup.active || Math.hypot(p.x - pickup.x, p.z - pickup.z) > PLAYER_PICKUP_DISTANCE * this.playerTuning.height / PLAYER.height || Math.abs(p.y - pickup.y) > 1.5 * this.playerTuning.height / PLAYER.height) return;
-        p.reserve = Math.min(WEAPON.maxReserve, p.reserve + WEAPON.pickupRounds);
+        const amount = ammoPickupAmount(equipped, p.reserve);
+        if (amount === 0) return;
+        p.reserve += amount;
         pickup.active = false; this.pickupRespawns.set(pickupId, now + this.pickupSeconds);
-        this.broadcast('pickup', { player: id, amount: WEAPON.pickupRounds });
+        this.broadcast('pickup', { player: id, amount, weapon: equipped });
       });
     });
     this.state.serverTime = Date.now();

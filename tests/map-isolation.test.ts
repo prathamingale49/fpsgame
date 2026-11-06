@@ -29,6 +29,8 @@ it('keeps concurrent practice maps isolated and ignores map requests in public r
     for (const room of rooms) {
       const map: MapData = JSON.parse(fs.readFileSync(`assets/public/maps/${room.state.mapId}.json`, 'utf8'));
       expect(room.state.players.size).toBe(room.state.practice ? 6 : 1);
+      expect(room.state.pickups.size).toBe(map.spawns.slice(2,8).length * (map.back?.enabled ? 2 : 1));
+      for (const pickup of room.state.pickups.values()) expect(onBoard(map,pickup.x,pickup.z,pickup.side as 'front'|'back')).toBe(true);
       for (const player of room.state.players.values()) {
         expect(onBoard(map,player.x,player.z,player.side as 'front'|'back')).toBe(true);
         expect(player.alive).toBe(true);

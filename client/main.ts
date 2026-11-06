@@ -5,7 +5,7 @@ import { Client, type Room } from '@colyseus/sdk';
 import { nearestFlipEdge, aimRay, collisionCacheStats, movementYaw, samplePosition, hitscan, COMBAT, DEV_SCALE, EDGE_FLIP_SECONDS, FLIP_COOLDOWN_SECONDS, JUMP_HEIGHT_RATIO, PLAYER, initialMotion, MOVEMENT_PROTOCOL, stepMotion, testMap, TICK, WEAPON, tuningForHeight, type Input, type MapData, type Motion, type BoardSide, type PositionSample, type ShotInput } from '../shared/game';
 import type { MatchState, PlayerState } from '../server/state';
 import './style.css';
-import { WEAPONS, WEAPON_IDS, CHARGE, HEAT, type WeaponId } from '../shared/weapons';
+import { validWeaponId, WEAPONS, WEAPON_IDS, CHARGE, HEAT, type WeaponId } from '../shared/weapons';
 import { createWeaponModel, animateWeapon, disposeWeaponModel } from './weapon-models';
 import { WEAPON_PICKUPS } from '../shared/weapon-pickups';
 import { EdgeOrbit } from './edge-orbit';
@@ -557,7 +557,7 @@ async function connect(mode: 'play' | 'create' | 'join' | 'reconnect' | 'practic
       document.body.append(element); damageNumbers.push({ ...msg, element, roomId: room.roomId, born: now, updated: now });
       if (damageNumbers.length > 6) damageNumbers.shift()!.element.remove();
     });
-    room.onMessage('pickup', (msg: { player: string; amount: number }) => { if (msg.player === room?.sessionId) { showFeed(`+${msg.amount} solder rounds`); sound(710, .16, 'sine'); } });
+    room.onMessage('pickup', (msg: { player: string; amount: number; weapon: WeaponId }) => { if (msg.player === room?.sessionId && validWeaponId(msg.weapon)) { showFeed(`+${msg.amount} ${WEAPONS[msg.weapon].name} Ammo`); sound(710, .16, 'sine'); } });
     room.onDrop(() => { recordMovement('drop', me?.ack ?? 0); mouseDown = false; pending = []; lastSentInput = null; showFeed('Connection lost · reconnecting'); });
     room.onReconnect(() => { const ack = room!.state.players.get(room!.sessionId)?.ack ?? seq; recordMovement('reconnect', ack); pending = []; lastSentInput = null; seq = ack; serverClockOffsetMs = NaN; sessionStorage.setItem('pcb-reconnection-token', room!.reconnectionToken); syncState(room!.state); showFeed('Connection restored'); });
     const joinedRoom = room;
