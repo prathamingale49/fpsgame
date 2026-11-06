@@ -12,6 +12,8 @@ Browser first-person deathmatch on real YJSP BMS, Recovery, and Vespula Flight S
 
 The repository includes all three source assemblies and generated maps. New multiplayer rooms select one of the three boards with equal probability, and keep that map through joins, reconnections, and round resets. The prototype map remains available as a fallback when no generated map is present.
 
+On the `feature/rocket-jetpack-flight` test branch, hold **Space** for fuel-limited rocket thrust and steer with **WASD**. Fuel lasts **2.5 seconds** and recharges over **3 seconds only while grounded**. After emptying the tank, release Space to rearm. Shift sprints on the ground; combat remains available in flight. See [flight tuning and manual checks](docs/rocket-jetpack-flight.md).
+
 ## 1. Install prerequisites
 
 - **Node.js 22.12 or newer** (includes `npm`): https://nodejs.org/

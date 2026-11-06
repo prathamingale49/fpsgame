@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import fs from 'node:fs';
-import { aimRay, collisionCacheStats, COMBAT, hitscan, initialMotion, JUMP_HEIGHT_RATIO, PLAYER, rayBox, rayPlayer, samplePosition, stepMotion, testMap, TICK, tuningForHeight, validDevHeight, validShotInput, WEAPON, type Input, type MapData, type PositionSample } from '../shared/game';
+import { aimRay, collisionCacheStats, COMBAT, hitscan, initialMotion, JUMP_HEIGHT_RATIO, PLAYER, rayBox, rayPlayer, samplePosition, stepMotion, testMap, TICK, tuningForHeight, validDevHeight, validShotInput, WEAPON, type Input, type Motion, type MapData, type PositionSample } from '../shared/game';
 
 const input: Input = { seq: 1, forward: 1, strafe: 0, yaw: 0, pitch: 0, jump: false, sprint: false };
 describe('movement', () => {
@@ -67,9 +67,9 @@ describe('movement', () => {
     for (let i = 0; i < 90; i++) m = stepMotion(m, { ...input, forward: 0 }, map);
     expect(m.y).toBeCloseTo(1.25, 2); expect(m.grounded).toBe(true);
   });
-  it('mantles a marked connector while holding jump and remains on top', () => {
+  it('retains connector mantling with empty rocket fuel and remains on top', () => {
     const map = { ...testMap, boxes: [{ min: [-3, 0, -6] as [number, number, number], max: [3, 4.25, -3] as [number, number, number], climbable: true, kind: 'connector' as const }] };
-    let m = initialMotion([0, 0, 0]);
+    let m: Motion = { ...initialMotion([0, 0, 0]), fuel: 0 };
     let climbed = false;
     for (let i = 0; i < 100; i++) {
       m = stepMotion(m, { ...input, forward: i < 25 ? 1 : 0, jump: true }, map);
@@ -88,7 +88,7 @@ describe('movement', () => {
     const header = { min: [-2, 0, -5] as [number, number, number], max: [2, 5, -4] as [number, number, number], kind: 'header' as const };
     const map = { ...testMap, boxes: [header] };
     let m = initialMotion([0, 0, 0]);
-    for (let i = 0; i < 90; i++) m = stepMotion(m, { ...input, jump: true }, map);
+    for (let i = 0; i < 90; i++) m = stepMotion(m, { ...input, jump: i === 0 }, map);
     expect(m.z).toBeGreaterThan(-4);
     expect(hitscan(aimRay(0, 0, 0, 0, 0), map, [['opponent', initialMotion([0, 0, -10])]], 'self').target).toBeUndefined();
   });
@@ -196,19 +196,19 @@ describe.skipIf(!fs.existsSync(bmsFile))('imported BMS collision geometry', () =
       expect(hit.target).toBeUndefined();
     }
   });
-  it('keeps J6 unreachable at the small default and mantleable at the reference dev scale', () => {
+  it('preserves J6 mantle scale limits without rocket fuel', () => {
     const connector = bms.boxes.find(b => b.name === 'J6');
     expect(connector?.climbable).toBe(true);
     const map = { ...bms, boxes: [connector!] };
     const x = (connector!.min[0] + connector!.max[0]) / 2;
     const spawn: [number, number, number] = [x, 0, connector!.max[2] + 3];
-    let smallPlayer = initialMotion(spawn);
+    let smallPlayer: Motion = { ...initialMotion(spawn), fuel: 0 };
     for (let i = 0; i < 100; i++) smallPlayer = stepMotion(smallPlayer, { ...input, forward: i < 40 ? 1 : 0, jump: true }, map);
     expect(smallPlayer.y).toBe(0);
     expect(smallPlayer.z).toBeGreaterThan(connector!.max[2]);
 
     const referenceTuning = tuningForHeight(1.8);
-    let referencePlayer = initialMotion(spawn);
+    let referencePlayer: Motion = { ...initialMotion(spawn), fuel: 0 };
     for (let i = 0; i < 100; i++) referencePlayer = stepMotion(referencePlayer, { ...input, forward: i < 40 ? 1 : 0, jump: true }, map, TICK, undefined, referenceTuning);
     expect(referencePlayer.y).toBeCloseTo(connector!.max[1], 2);
     expect(referencePlayer.grounded).toBe(true);

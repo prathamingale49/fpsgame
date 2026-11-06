@@ -3,12 +3,12 @@ import { Room, type Client } from 'colyseus';
 import { MatchState, PlayerState, PickupState, WeaponPickupState } from './state.js';
 import { ammoPickupAmount, WEAPONS, validWeaponId, ironDamage, sniperAim, pumpRays, weaponHits, weaponKillMessage, HEAT, type WeaponId } from '../shared/weapons.js';
 import { weaponPickupLocations, droppedWeaponPosition, canCollectWeapon, WEAPON_PICKUPS } from '../shared/weapon-pickups.js';
-import { onBoard, aimRay, movementYaw, collisionCacheStats, hitscan, initialMotion, samplePosition, stepMotion, testMap, TICK, MOVEMENT_PROTOCOL, MATCH_SECONDS, RESPAWN_SECONDS, PLAYER, WEAPON, COMBAT, tuningForHeight, validDevHeight, validInput, validShotInput, type Input, type ShotInput, type PositionSample, type MapData, type Motion, type PlayerTuning, type BoardSide } from '../shared/game.js';
+import { JETPACK, onBoard, aimRay, movementYaw, collisionCacheStats, hitscan, initialMotion, samplePosition, stepMotion, testMap, TICK, MOVEMENT_PROTOCOL, MATCH_SECONDS, RESPAWN_SECONDS, PLAYER, WEAPON, COMBAT, tuningForHeight, validDevHeight, validInput, validShotInput, type Input, type ShotInput, type PositionSample, type MapData, type Motion, type PlayerTuning, type BoardSide } from '../shared/game.js';
 const PLAYER_PICKUP_DISTANCE = .9;
 const TRACE_MOVEMENT = process.env.PCB_MOVEMENT_TRACE === '1';
 export const DEV_SCALE_ENABLED = process.env.PCB_DEV_SCALE === '1' && process.env.NODE_ENV !== 'production';
 
-type Runtime = { queue: Map<number, Input>; lastReceived: number; lastSeq: number; credit: number; lastShot: number; lastShotId: number; reloadAt: number; respawnAt: number };
+type Runtime = { lastProcessedAt: number; queue: Map<number, Input>; lastReceived: number; lastSeq: number; credit: number; lastShot: number; lastShotId: number; reloadAt: number; respawnAt: number };
 export let activeMap: MapData = testMap;
 export function setActiveMap(map: MapData) { activeMap = map; }
 let multiplayerMaps: MapData[] = [];
@@ -180,7 +180,7 @@ export class GameRoom extends Room {
     const spawn = this.map.spawns[this.spawnIndex++ % this.map.spawns.length];
     const p = new PlayerState({ name: safeName(options?.name), x: spawn[0], y: spawn[1], z: spawn[2] });
     this.state.players.set(client.sessionId, p);
-    this.runtime.set(client.sessionId, { queue: new Map(), lastReceived: 0, lastSeq: 0, credit: 0, lastShot: -Infinity, lastShotId: -1, reloadAt: 0, respawnAt: 0 });
+    this.runtime.set(client.sessionId, { lastProcessedAt: Date.now() / 1000, queue: new Map(), lastReceived: 0, lastSeq: 0, credit: 0, lastShot: -Infinity, lastShotId: -1, reloadAt: 0, respawnAt: 0 });
     if (this.practice) { this.startMatch(); this.spawnBots(); }
     else if (this.state.players.size >= 2 && this.state.phase === 'waiting') this.startMatch();
     this.broadcast('feed', { text: `${p.name} connected` });
@@ -191,7 +191,7 @@ export class GameRoom extends Room {
     this.killChain.reset(client.sessionId);
     if (TRACE_MOVEMENT) console.log('MOVE_TRACE', JSON.stringify({ event: 'drop', player: client.sessionId }));
     const p = this.state.players.get(client.sessionId);
-    if (p) p.connected = false;
+    if (p) { p.connected = false; p.boosting = false; }
     const r = this.runtime.get(client.sessionId); if (r) { r.queue.clear(); r.credit = 0; r.lastSeq = r.lastReceived; if (p) p.ack = r.lastSeq; }
     this.allowReconnection(client, 30);
   }
@@ -227,6 +227,7 @@ export class GameRoom extends Room {
         p.x = motion.x; p.y = motion.y; p.z = motion.z; p.vy = motion.vy; p.grounded = true;
         p.side = 'front'; p.transitionCooldown = 0; p.flipCooldown = 0; p.headingOffset = 0;
       }
+      p.fuel = 1; p.boosting = false; p.boostLocked = false;
       p.jumpHeld = false; p.mantleTarget = 0; p.sniperReloadAt = 0; p.ads = false;
       p.weapon = 'solder'; p.specialWeapon = ''; p.heat = 0; p.overheated = false; p.triggerHeld = false; p.chargeStarted = 0; p.weaponReadyAt = 0;
       p.kills = 0; p.deaths = 0; p.hp = 100; p.alive = true; p.ammo = WEAPON.magazine; p.reserve = WEAPON.reserve; p.reloading = false;
@@ -234,6 +235,13 @@ export class GameRoom extends Room {
     this.runtime.forEach((r, id) => { r.queue.clear(); r.credit = 0; r.lastSeq = r.lastReceived; r.lastShot = -Infinity; r.lastShotId = -1; r.reloadAt = 0; const p = this.state.players.get(id); if (p) p.ack = r.lastSeq; });
     this.state.pickups.forEach((pickup) => { pickup.active = true; }); this.pickupRespawns.clear();
     this.broadcast('feed', { text: 'Match started' });
+  }
+
+  private movePlayer(p: PlayerState, input: Input) {
+    const motion = stepMotion({ x: p.x, y: p.y, z: p.z, vy: p.vy, grounded: p.grounded, jumpHeld: p.jumpHeld, mantleTarget: p.mantleTarget, fuel: p.fuel, boosting: p.boosting, boostLocked: p.boostLocked, side: p.side as BoardSide, transitionCooldown: p.transitionCooldown, flipCooldown: p.flipCooldown, headingOffset: p.headingOffset }, input, this.map, TICK, undefined, this.playerTuning);
+    p.x = motion.x; p.y = motion.y; p.z = motion.z; p.vy = motion.vy; p.grounded = motion.grounded; p.jumpHeld = motion.jumpHeld; p.mantleTarget = motion.mantleTarget;
+    p.side = motion.side ?? 'front'; p.transitionCooldown = motion.transitionCooldown ?? 0; p.flipCooldown = motion.flipCooldown ?? 0; p.headingOffset = motion.headingOffset ?? 0;
+    p.fuel = motion.fuel ?? 1; p.boosting = motion.boosting ?? false; p.boostLocked = motion.boostLocked ?? false;
   }
 
   private tick() {
@@ -294,13 +302,24 @@ export class GameRoom extends Room {
       while (r.credit >= 1 && r.queue.has(r.lastSeq + 1) && processed < 60) {
         const input = r.queue.get(r.lastSeq + 1)!;
         r.queue.delete(input.seq);
-        const motion = stepMotion({ x: p.x, y: p.y, z: p.z, vy: p.vy, grounded: p.grounded, jumpHeld: p.jumpHeld, mantleTarget: p.mantleTarget, side: p.side as BoardSide, transitionCooldown: p.transitionCooldown, flipCooldown: p.flipCooldown, headingOffset: p.headingOffset }, input, this.map, TICK, undefined, this.playerTuning);
-        p.x = motion.x; p.y = motion.y; p.z = motion.z; p.vy = motion.vy; p.grounded = motion.grounded; p.jumpHeld = motion.jumpHeld; p.mantleTarget = motion.mantleTarget;
-        p.side = motion.side ?? 'front'; p.transitionCooldown = motion.transitionCooldown ?? 0; p.flipCooldown = motion.flipCooldown ?? 0; p.headingOffset = motion.headingOffset ?? 0;
+        this.movePlayer(p, input);
+        r.lastProcessedAt = now;
         p.yaw = input.yaw; p.pitch = input.pitch;
         r.lastSeq = input.seq; p.ack = input.seq; r.credit--; processed++;
         if (p.y < this.map.ground - PLAYER.fallDeathDepth) { this.fall(id, now); break; }
         if (TRACE_MOVEMENT) console.log('MOVE_TRACE', JSON.stringify({ event: 'process', player: id, seq: input.seq, ack: p.ack, queue: r.queue.size, position: [p.x, p.y, p.z] }));
+      }
+      // Withholding input must not suspend a rocket indefinitely in midair.
+      // After the normal input lease, advance neutral physics without changing
+      // the acknowledged input sequence or accepting client-supplied fuel.
+      if (!p.npc && now-r.lastProcessedAt > JETPACK.inputLeaseSeconds && !r.queue.has(r.lastSeq+1)
+        && (!p.grounded || p.fuel < 1 || p.boosting || p.transitionCooldown > 0)) {
+        r.credit = Math.min(r.credit, 6);
+        while (r.credit >= 1 && p.alive) {
+          this.movePlayer(p, {seq:r.lastSeq, forward:0, strafe:0, yaw:p.yaw, pitch:p.pitch, jump:false, sprint:false});
+          r.credit--;
+          if (p.y < this.map.ground-PLAYER.fallDeathDepth) this.fall(id,now);
+        }
       }
       serverPerf.processed += processed;
       serverPerf.queueMax = Math.max(serverPerf.queueMax, r.queue.size);
@@ -335,7 +354,7 @@ export class GameRoom extends Room {
     const p = this.state.players.get(id), r = this.runtime.get(id);
     if (!p || !r || !p.alive) return;
     this.dropSpecial(id);
-    p.hp = 0; p.alive = false; p.deaths++; p.reloading = false; p.mantleTarget = 0; p.ads = false; p.sniperReloadAt = 0;
+    p.hp = 0; p.alive = false; p.boosting = false; p.deaths++; p.reloading = false; p.mantleTarget = 0; p.ads = false; p.sniperReloadAt = 0;
     this.cancelWeapon(id);
     r.respawnAt = now + RESPAWN_SECONDS;
     this.hitHistory.delete(id);
@@ -405,7 +424,7 @@ export class GameRoom extends Room {
     for (const client of this.clients) if (client.sessionId === id || client.sessionId === targetId) client.send('damage', feedback);
     if (target.hp === 0) {
       this.dropSpecial(targetId);
-      target.alive = false; target.deaths++; p.kills++; target.ads = false; target.sniperReloadAt = 0;
+      target.alive = false; target.boosting = false; target.deaths++; p.kills++; target.ads = false; target.sniperReloadAt = 0;
       this.cancelWeapon(targetId);
       this.hitHistory.delete(targetId);
       const targetRuntime = this.runtime.get(targetId); if (targetRuntime) targetRuntime.respawnAt = now + (target.npc ? 3 : RESPAWN_SECONDS);
@@ -422,7 +441,7 @@ export class GameRoom extends Room {
     this.hitHistory.delete(id);
     const spawn = p.npc ? this.botSpawn(Number(id.slice(4))) : this.map.spawns[this.spawnIndex++ % this.map.spawns.length];
     const m = initialMotion(spawn);
-    p.x = m.x; p.y = m.y; p.z = m.z; p.vy = 0; p.grounded = true; p.jumpHeld = false; p.mantleTarget = 0;
+    p.x = m.x; p.y = m.y; p.z = m.z; p.vy = 0; p.fuel = 1; p.boosting = false; p.boostLocked = false; p.grounded = true; p.jumpHeld = false; p.mantleTarget = 0;
     p.side = 'front'; p.transitionCooldown = 0; p.flipCooldown = 0; p.headingOffset = 0;
     this.cancelWeapon(id); this.weapons.delete(id); p.weapon = 'solder'; p.specialWeapon = ''; p.heat = 0; p.overheated = false; p.weaponReadyAt = 0; p.sniperReloadAt = 0; p.ads = false;
     p.hp = 100; p.alive = true; p.ammo = WEAPON.magazine; p.reserve = WEAPON.reserve; p.reloading = false;
@@ -456,7 +475,7 @@ export class GameRoom extends Room {
       const id = `npc-${i}`, spawn = this.botSpawn(i);
       this.state.players.set(id, new PlayerState({ npc: true, name: `${i === 0 ? 'Precision' : i < 3 ? 'Walking' : 'Dynamic'} ${i + 1}`, x: spawn[0], y: spawn[1], z: spawn[2] }));
       this.bots.set(id, { mode: i === 0 ? 0 : i < 3 ? 1 : 2, next: 0, yaw: 0, moving: false, sprint: false });
-      this.runtime.set(id, { queue: new Map(), lastReceived: 0, lastSeq: 0, credit: 0, lastShot: -Infinity, lastShotId: -1, reloadAt: 0, respawnAt: 0 });
+      this.runtime.set(id, { lastProcessedAt: Date.now() / 1000, queue: new Map(), lastReceived: 0, lastSeq: 0, credit: 0, lastShot: -Infinity, lastShotId: -1, reloadAt: 0, respawnAt: 0 });
     }
   }
   private equipWeapon(id: string, value: WeaponId) {

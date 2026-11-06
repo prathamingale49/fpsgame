@@ -2,13 +2,14 @@ import * as THREE from 'three';
 import { PRACTICE_MAPS } from '../shared/maps';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 import { Client, type Room } from '@colyseus/sdk';
-import { nearestFlipEdge, aimRay, collisionCacheStats, movementYaw, samplePosition, hitscan, COMBAT, DEV_SCALE, EDGE_FLIP_SECONDS, FLIP_COOLDOWN_SECONDS, JUMP_HEIGHT_RATIO, PLAYER, initialMotion, MOVEMENT_PROTOCOL, stepMotion, testMap, TICK, WEAPON, tuningForHeight, type Input, type MapData, type Motion, type BoardSide, type PositionSample, type ShotInput } from '../shared/game';
+import { JETPACK, nearestFlipEdge, aimRay, collisionCacheStats, movementYaw, samplePosition, hitscan, COMBAT, DEV_SCALE, EDGE_FLIP_SECONDS, FLIP_COOLDOWN_SECONDS, JUMP_HEIGHT_RATIO, PLAYER, initialMotion, MOVEMENT_PROTOCOL, stepMotion, testMap, TICK, WEAPON, tuningForHeight, type Input, type MapData, type Motion, type BoardSide, type PositionSample, type ShotInput } from '../shared/game';
 import type { MatchState, PlayerState } from '../server/state';
 import './style.css';
 import { validWeaponId, WEAPONS, WEAPON_IDS, CHARGE, HEAT, type WeaponId } from '../shared/weapons';
 import { createWeaponModel, animateWeapon, disposeWeaponModel } from './weapon-models';
 import { WEAPON_PICKUPS } from '../shared/weapon-pickups';
 import { EdgeOrbit } from './edge-orbit';
+import { RocketFlightVisual } from './rocket-flight';
 import { mergeDamageNumber, damageNumberVisible, type DamageFeedback, type DamageNumber } from './damage-feedback';
 
 const el = <T extends HTMLElement>(id: string) => document.getElementById(id) as T;
@@ -52,6 +53,7 @@ weaponStatus.style.cssText = 'position:absolute;right:28px;bottom:145px;color:#f
 el('hud').append(weaponStatus);
 const weaponMeter = document.createElement('progress'); weaponMeter.id = 'weapon-meter'; weaponMeter.max = 1;
 weaponMeter.style.cssText = 'position:absolute;right:28px;bottom:125px;width:200px;height:10px;accent-color:#ffd24a'; weaponMeter.hidden = true; el('hud').append(weaponMeter);
+const fuelHud = document.createElement('div'); fuelHud.id = 'fuel-hud'; fuelHud.innerHTML = '<span id="fuel-label">FUEL 100%</span><div id="fuel-meter" role="progressbar" aria-label="Rocket fuel" aria-valuemin="0" aria-valuemax="100"><i id="fuel-fill"></i></div>'; el('hud').append(fuelHud);
 let specialHeld = false, fullChargeCue = false;
 const currentWeapon = () => WEAPONS[(room?.state.players?.get(room.sessionId)?.weapon ?? 'solder') as WeaponId];
 const weaponShot = (): ShotInput => ({ shotId: ++nextShotId, seq, yaw, pitch, viewTime: lastViewTime || undefined });
@@ -115,7 +117,7 @@ function recordMovement(event: string, ack: number, correctionValue = 0, forward
   if (movementEvents.length > 4000) movementEvents.shift();
 }
 const keys = new Set<string>();
-type RemotePlayer = { mesh: THREE.Group; healthBar: THREE.Group; healthFill: THREE.Mesh<THREE.PlaneGeometry, THREE.MeshBasicMaterial>; samples: PositionSample[]; yaw: number; hp: number; displayedHp: number };
+type RemotePlayer = { flight: RocketFlightVisual; mesh: THREE.Group; healthBar: THREE.Group; healthFill: THREE.Mesh<THREE.PlaneGeometry, THREE.MeshBasicMaterial>; samples: PositionSample[]; yaw: number; hp: number; displayedHp: number };
 const remotes = new Map<string, RemotePlayer>();
 const shots: { line: THREE.LineSegments | THREE.Line; born: number }[] = [];
 const predictedTracers = new Map<number, THREE.Line>();
@@ -175,6 +177,8 @@ function sceneResources() {
   renderer: { geometries: renderer.info.memory.geometries, textures: renderer.info.memory.textures, calls: renderer.info.render.calls, triangles: renderer.info.render.triangles },
   scene: sceneResources(), gpu, mapId: map.id, authoritativeMapId: room?.state.mapId,
   cache: collisionCacheStats(map), heapMB: ((performance as Performance & { memory?: { usedJSHeapSize: number } }).memory?.usedJSHeapSize ?? 0) / 1048576,
+  grounded: local.grounded, vy: local.vy, boostingRemotes: [...remotes].filter(([,entry]) => entry.flight.exhaust.visible).map(([id]) => id),
+  fuel: local.fuel, boosting: local.boosting, authoritativeFuel: room?.state?.players?.get(room.sessionId)?.fuel,
   position: [local.x, local.y, local.z], authoritative: room?.state?.players?.get(room.sessionId) ? [room.state.players!.get(room.sessionId)!.x, room.state.players!.get(room.sessionId)!.y, room.state.players!.get(room.sessionId)!.z] : null,
   side: local.side ?? 'front', authoritativeSide: room?.state?.players?.get(room.sessionId)?.side,
   testRemaining: testMove?.remaining ?? 0,
@@ -191,8 +195,10 @@ function boxMesh(box: { min: number[]; max: number[]; name?: string }, mat: THRE
   mesh.castShadow = false; mesh.receiveShadow = true; return mesh;
 }
 function clearSessionVisuals() {
+  updateFlightAudio(false); wasGrounded = true;
   snapshot = null; pending = []; keys.clear(); mouseDown = false; boardFlip = null;
   for (const entry of remotes.values()) {
+    entry.flight.dispose();
     scene.remove(entry.mesh, entry.healthBar);
     entry.mesh.traverse(obj => { if (obj instanceof THREE.Mesh) obj.geometry.dispose(); });
     entry.healthBar.traverse(obj => { if (obj instanceof THREE.Mesh) { obj.geometry.dispose(); (obj.material as THREE.Material).dispose(); } });
@@ -294,7 +300,8 @@ function makePlayer(id: string): THREE.Group {
   // Avatar meshes are recreated across sides and respawns; identity keeps their color stable.
   let index = 0;
   for (let i = 0; i < id.length; i++) index = (Math.imul(index, 31) + id.charCodeAt(i)) >>> 0;
-  const group = new THREE.Group(); const suit = playerMaterials[index % playerMaterials.length];
+  const root = new THREE.Group(), group = new THREE.Group(); root.add(group);
+  const suit = playerMaterials[index % playerMaterials.length];
   // An upright rocket-person: pointed nose, cylindrical suit, view window, fins and boots.
   const body = new THREE.Mesh(new THREE.CylinderGeometry(.34, .43, 1.15, 12), suit); body.position.y = 1; group.add(body);
   const nose = new THREE.Mesh(new THREE.ConeGeometry(.34, .72, 12), suit); nose.position.y = 1.94; group.add(nose);
@@ -308,8 +315,9 @@ function makePlayer(id: string): THREE.Group {
     const boot = new THREE.Mesh(new THREE.BoxGeometry(.24, .21, .34), dark); boot.position.set(side * .24, .13, -.08); group.add(boot);
     const arm = new THREE.Mesh(new THREE.CapsuleGeometry(.11, .33, 4, 8), suit); arm.position.set(side * .44, 1.09, -.04); arm.rotation.z = side * .2; group.add(arm);
   }
-  group.scale.setScalar(playerTuning.height / 2.48);
-  return group;
+  root.scale.setScalar(playerTuning.height / 2.48);
+  root.userData.flight = new RocketFlightVisual(group);
+  return root;
 }
 function makeHealthBar(): { bar: THREE.Group; fill: THREE.Mesh<THREE.PlaneGeometry, THREE.MeshBasicMaterial> } {
   const bar = new THREE.Group();
@@ -345,6 +353,27 @@ function sound(frequency: number, duration: number, wave: OscillatorType = 'sawt
     oscillator.connect(gain).connect(audioContext.destination);
     oscillator.start(); oscillator.stop(audioContext.currentTime + duration);
   } catch { /* audio unavailable */ }
+}
+
+let engineAudio: { oscillator: OscillatorNode; gain: GainNode } | null = null;
+let wasGrounded = true;
+function updateFlightAudio(active: boolean) {
+  if (active && volume > 0 && !engineAudio) {
+    sound(190, .12, 'triangle');
+    try {
+      audioContext ??= new AudioContext();
+      if (audioContext.state === 'suspended') void audioContext.resume();
+      const oscillator = audioContext.createOscillator(), gain = audioContext.createGain();
+      oscillator.type = 'triangle'; oscillator.frequency.value = 95;
+      gain.gain.setValueAtTime(0, audioContext.currentTime); gain.gain.linearRampToValueAtTime(volume*.035,audioContext.currentTime+.08);
+      oscillator.connect(gain).connect(audioContext.destination); oscillator.start(); engineAudio={oscillator,gain};
+    } catch { /* audio unavailable */ }
+  } else if ((!active || volume <= 0) && engineAudio) {
+    const {oscillator,gain}=engineAudio; engineAudio=null;
+    const at=audioContext!.currentTime;
+    gain.gain.cancelScheduledValues(at); gain.gain.setTargetAtTime(0,at,.025);
+    oscillator.onended=()=>{oscillator.disconnect();gain.disconnect();}; oscillator.stop(at+.12);
+  } else if (engineAudio) engineAudio.gain.gain.setTargetAtTime(volume*.035,audioContext!.currentTime,.05);
 }
 
 let eliminationTimer: ReturnType<typeof setTimeout> | undefined;
@@ -463,7 +492,7 @@ function syncState(state: MatchState) {
     if (me.reloading && !wasReloading) sound(570, .22, 'triangle');
     wasReloading = me.reloading;
     const before = local;
-    const authoritative: Motion = { x: me.x, y: me.y, z: me.z, vy: me.vy, grounded: me.grounded, jumpHeld: me.jumpHeld, mantleTarget: me.mantleTarget, side: me.side as BoardSide, transitionCooldown: me.transitionCooldown, flipCooldown: me.flipCooldown, headingOffset: me.headingOffset };
+    const authoritative: Motion = { x: me.x, y: me.y, z: me.z, vy: me.vy, grounded: me.grounded, jumpHeld: me.jumpHeld, mantleTarget: me.mantleTarget, fuel: me.fuel, boosting: me.boosting, boostLocked: me.boostLocked, side: me.side as BoardSide, transitionCooldown: me.transitionCooldown, flipCooldown: me.flipCooldown, headingOffset: me.headingOffset };
     pending = pending.filter(input => input.seq > me.ack);
     local = pending.reduce((motion, input) => stepMotion(motion, input, map, TICK, undefined, playerTuning), authoritative);
     correction = Math.hypot(local.x - before.x, local.y - before.y, local.z - before.z);
@@ -483,7 +512,7 @@ function syncState(state: MatchState) {
       const mesh = makePlayer(id);
       const { bar, fill } = makeHealthBar();
       scene.add(mesh, bar);
-      entry = { mesh, healthBar: bar, healthFill: fill, samples: [], yaw: p.yaw, hp: p.hp, displayedHp: p.hp };
+      entry = { flight: mesh.userData.flight as RocketFlightVisual, mesh, healthBar: bar, healthFill: fill, samples: [], yaw: p.yaw, hp: p.hp, displayedHp: p.hp };
       mesh.position.set(p.x, p.y, p.z);
       remotes.set(id, entry);
     }
@@ -494,6 +523,7 @@ function syncState(state: MatchState) {
     entry.yaw = p.yaw + p.headingOffset; entry.hp = p.hp;
   });
   for (const [id, entry] of remotes) if (!present.has(id)) {
+    entry.flight.dispose();
     scene.remove(entry.mesh, entry.healthBar);
     entry.mesh.traverse(obj => { if (obj instanceof THREE.Mesh) obj.geometry.dispose(); });
     entry.healthBar.traverse(obj => { if (obj instanceof THREE.Mesh) { obj.geometry.dispose(); (obj.material as THREE.Material).dispose(); } });
@@ -584,7 +614,7 @@ document.addEventListener('keydown', e => {
 });
 el('leave').onclick = () => { sessionStorage.removeItem('pcb-reconnection-token'); room?.leave(); };
 el('room-label').onclick = () => { if (!room) return; navigator.clipboard.writeText(location.href).then(() => showFeed('Invite link copied')); };
-el('controls-toggle').onclick = () => { el('menu-detail').classList.remove('hidden'); el('menu-detail').innerHTML = 'WASD move · Mouse aim · Click shoot · Space jump · Shift sprint · R reload · Tab scoreboard · Esc pause'; };
+el('controls-toggle').onclick = () => { el('menu-detail').classList.remove('hidden'); el('menu-detail').innerHTML = 'WASD move · Mouse aim · Click shoot · Hold Space rocket thrust · Shift ground sprint · R reload · Tab scoreboard · Esc pause'; };
 el('settings-toggle').onclick = () => {
   el('menu-detail').classList.remove('hidden');
   el('menu-detail').innerHTML = `<label for="sensitivity">MOUSE SENSITIVITY</label><input id="sensitivity" type="range" min=".0008" max=".005" step=".0001" value="${sensitivity}"><label for="volume">SOUND VOLUME</label><input id="volume" type="range" min="0" max="1" step=".05" value="${volume}"><label for="quality">GRAPHICS QUALITY</label><select id="quality"><option value="low">Performance</option><option value="balanced">Balanced</option><option value="high">High</option></select>`;
@@ -617,7 +647,8 @@ document.addEventListener('mouseup', e => {
 document.addEventListener('pointerlockchange', () => { el('pause').classList.toggle('hidden', !room || !mapsSidebar.hidden || document.pointerLockElement === canvas); keys.clear(); mouseDown = false; });
 window.addEventListener('blur', () => { keys.clear(); mouseDown = false; });
 window.addEventListener('blur', cancelSpecial);
-document.addEventListener('visibilitychange', () => { if (document.hidden) { mouseDown = false; cancelSpecial(); } });
+window.addEventListener('blur', () => updateFlightAudio(false));
+document.addEventListener('visibilitychange', () => { if (document.hidden) { mouseDown = false; cancelSpecial(); updateFlightAudio(false); } });
 document.addEventListener('pointerlockchange', () => { if (document.pointerLockElement !== canvas) cancelSpecial(); });
 document.addEventListener('keydown', e => {
   if (!room || e.repeat) return;
@@ -654,7 +685,7 @@ setInterval(() => {
     sprint: soakMode || (!testing && locked && (keys.has('ShiftLeft') || keys.has('ShiftRight'))) };
   if (soakMode) soakTick++;
   if (testing && --testMove!.remaining === 0) testMove = null;
-  const repeatedIdle = (local.flipCooldown ?? 0) === 0 && local.grounded && local.mantleTarget === 0 && (local.transitionCooldown ?? 0) === 0 && input.forward === 0 && input.strafe === 0 && !input.jump && !input.sprint && lastSentInput
+  const repeatedIdle = (local.fuel ?? 1) >= 1 && !local.boosting && (local.flipCooldown ?? 0) === 0 && local.grounded && local.mantleTarget === 0 && (local.transitionCooldown ?? 0) === 0 && input.forward === 0 && input.strafe === 0 && !input.jump && !input.sprint && lastSentInput
     && lastSentInput.forward === 0 && lastSentInput.strafe === 0 && !lastSentInput.jump && !lastSentInput.sprint
     && lastSentInput.yaw === input.yaw && lastSentInput.pitch === input.pitch;
   if (repeatedIdle) return;
@@ -734,12 +765,26 @@ function frame(now: number) {
   } else {
     const t = now * .00015; camera.position.set(Math.sin(t) * 30, 24, Math.cos(t) * 30); camera.lookAt(0, 0, 0);
   }
+  const flightMe = room?.state?.players?.get(room.sessionId);
+  const activeEngine = !!flightMe?.alive && !!local.boosting && !boardFlip && document.pointerLockElement === canvas;
+  updateFlightAudio(activeEngine);
+  if (flightMe?.alive && local.grounded && !wasGrounded && !boardFlip && (local.transitionCooldown ?? 0) <= 0) sound(100,.09,'sine');
+  wasGrounded = local.grounded;
+  const fuel = Math.round(100*(local.fuel ?? 1));
+  el('fuel-label').textContent = fuel <= 0 ? 'FUEL EMPTY · LAND TO REFILL' : `FUEL ${fuel}%${local.boostLocked && keys.has('Space') ? ' · RELEASE SPACE' : activeEngine ? ' · BOOST' : ''}`;
+  el('fuel-fill').style.width = `${fuel}%`; fuelHud.classList.toggle('empty',fuel<=0);
+  el('fuel-meter').setAttribute('aria-valuenow',String(fuel));
   const renderTime = Number.isFinite(serverClockOffsetMs) ? Date.now() - serverClockOffsetMs - COMBAT.interpolationMs : 0;
   if (renderTime > 0) lastViewTime = renderTime;
-  for (const entry of remotes.values()) {
+  for (const [id, entry] of remotes) {
+    const oldX = entry.mesh.position.x, oldZ = entry.mesh.position.z;
     const rendered = samplePosition(entry.samples, renderTime, COMBAT.extrapolationMs);
     if (rendered) entry.mesh.position.set(rendered.x, rendered.y, rendered.z);
     entry.mesh.rotation.y += Math.atan2(Math.sin(entry.yaw - entry.mesh.rotation.y), Math.cos(entry.yaw - entry.mesh.rotation.y)) * Math.min(1, dt * 12);
+    const flightState = snapshot?.players.get(id);
+    entry.flight.update(dt, now, { boosting: !!flightState?.boosting, grounded: flightState?.grounded ?? true,
+      vx: (entry.mesh.position.x-oldX)/Math.max(.001,dt), vz: (entry.mesh.position.z-oldZ)/Math.max(.001,dt),
+      vy: flightState?.vy ?? 0, yaw: entry.mesh.rotation.y, speed: playerTuning.walkSpeed });
     entry.displayedHp = THREE.MathUtils.damp(entry.displayedHp, entry.hp, 18, dt);
     const fraction = THREE.MathUtils.clamp(entry.displayedHp / 100, 0, 1);
     entry.healthFill.scale.x = Math.max(.001, fraction);

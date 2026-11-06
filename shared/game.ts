@@ -1,6 +1,7 @@
 export const TICK = 1 / 60;
-// Older clients assume BMS for every multiplayer room.
-export const MOVEMENT_PROTOCOL = 8;
+// Flight fuel and thrust state must agree between prediction and the server.
+export const MOVEMENT_PROTOCOL = 9;
+export const JETPACK = { boostSeconds: 2.5, rechargeSeconds: 3, thrustGravityRatio: 1.8, ascentSprintRatio: 1.5, fallSprintRatio: 2.25, inputLeaseSeconds: .25, fuelEpsilon: 1e-6 } as const;
 export const EDGE_FLIP_SECONDS = .9;
 export const FLIP_COOLDOWN_SECONDS = 5;
 export const MATCH_SECONDS = 300;
@@ -73,7 +74,7 @@ export function validShotInput(value: unknown): value is ShotInput {
     && typeof v.pitch === 'number' && Number.isFinite(v.pitch) && Math.abs(v.pitch) <= 1.5
     && (v.viewTime === undefined || (typeof v.viewTime === 'number' && Number.isFinite(v.viewTime)));
 }
-export type Motion = { x: number; y: number; z: number; vy: number; grounded: boolean; jumpHeld: boolean; mantleTarget: number; side?: BoardSide; transitionCooldown?: number; flipCooldown?: number; headingOffset?: number };
+export type Motion = { fuel?: number; boosting?: boolean; boostLocked?: boolean; x: number; y: number; z: number; vy: number; grounded: boolean; jumpHeld: boolean; mantleTarget: number; side?: BoardSide; transitionCooldown?: number; flipCooldown?: number; headingOffset?: number };
 export type PositionSample = { time: number; x: number; y: number; z: number; side?: BoardSide };
 // Snapshots are sampled in server time so the client can render and shoot against
 // the same historical target position; never interpolate through side changes.
@@ -145,7 +146,7 @@ export function transitionEdge(motion: Motion, map: MapData, tuning: PlayerTunin
   // Snap the two orientations so synchronized float32 round-off cannot
   // accumulate over an unlimited number of wraps.
   const headingOffset = xOutside ? ((motion.headingOffset ?? 0) > 1 ? 0 : Math.PI) : (motion.headingOffset ?? 0);
-  return { ...motion, x, z, y: y + .02, vy: 0, grounded: true, mantleTarget: 0, side, headingOffset, transitionCooldown: EDGE_FLIP_SECONDS, flipCooldown: FLIP_COOLDOWN_SECONDS };
+  return { ...motion, x, z, y: y + .02, vy: 0, boosting: false, grounded: true, mantleTarget: 0, side, headingOffset, transitionCooldown: EDGE_FLIP_SECONDS, flipCooldown: FLIP_COOLDOWN_SECONDS };
 }
 
 export const testMap: MapData = {
@@ -159,7 +160,7 @@ export const testMap: MapData = {
 };
 
 export function clamp(value: number, lo: number, hi: number): number { return Math.max(lo, Math.min(hi, value)); }
-export function initialMotion(spawn: Spawn): Motion { return { x: spawn[0], y: spawn[1], z: spawn[2], vy: 0, grounded: true, jumpHeld: false, mantleTarget: 0, side: 'front', transitionCooldown: 0, flipCooldown: 0, headingOffset: 0 }; }
+export function initialMotion(spawn: Spawn): Motion { return { x: spawn[0], y: spawn[1], z: spawn[2], vy: 0, fuel: 1, boosting: false, boostLocked: false, grounded: true, jumpHeld: false, mantleTarget: 0, side: 'front', transitionCooldown: 0, flipCooldown: 0, headingOffset: 0 }; }
 export function validInput(v: unknown): v is Input {
   if (!v || typeof v !== 'object') return false;
   const a = v as Record<string, unknown>;
@@ -213,7 +214,7 @@ export function stepMotion(previous: Motion, input: Input, map: MapData, dt = TI
   // The flip is part of authoritative movement, not merely a visual effect.
   // Keep the player at the arrival point until the animation has completed.
   if ((previous.transitionCooldown ?? 0) > 0) return transitionEdge({
-    ...previous, vy: 0, grounded: true, jumpHeld: input.jump,
+    ...previous, vy: 0, boosting: false, grounded: true, jumpHeld: input.jump,
     flipCooldown: ((previous.flipCooldown ?? 0) <= dt + .0001 ? 0 : (previous.flipCooldown ?? 0) - dt), transitionCooldown: Math.max(0, (previous.transitionCooldown ?? 0) - dt),
   }, rootMap, tuning);
   input = { ...input, yaw: movementYaw(input.yaw, previous) };
@@ -221,10 +222,22 @@ export function stepMotion(previous: Motion, input: Input, map: MapData, dt = TI
   const out = { ...previous, flipCooldown: ((previous.flipCooldown ?? 0) <= dt + .0001 ? 0 : (previous.flipCooldown ?? 0) - dt), transitionCooldown: Math.max(0, (previous.transitionCooldown ?? 0) - dt) };
   const f = input.forward, s = input.strafe;
   const len = Math.max(1, Math.hypot(f, s));
-  const speed = input.sprint ? tuning.sprintSpeed : tuning.walkSpeed;
+  const speed = input.sprint && out.grounded ? tuning.sprintSpeed : tuning.walkSpeed;
   const dx = (-Math.sin(input.yaw) * f + Math.cos(input.yaw) * s) / len * speed * dt;
   const dz = (-Math.cos(input.yaw) * f - Math.sin(input.yaw) * s) / len * speed * dt;
-  if (input.jump && !out.jumpHeld && out.grounded) { out.vy = tuning.jumpSpeed; out.grounded = false; }
+  out.fuel = clamp(previous.fuel ?? 1, 0, 1);
+  out.boostLocked = input.jump && (previous.boostLocked ?? false);
+  if (input.jump && out.fuel <= JETPACK.fuelEpsilon) out.boostLocked = true;
+  const launching = input.jump && !out.jumpHeld && out.grounded;
+  // Preserve a short tap's existing jump arc. Sustained acceleration starts on
+  // the following tick, so pressing Space in flight never resets velocity.
+  if (launching) { out.vy = tuning.jumpSpeed; out.grounded = false; }
+  out.boosting = input.jump && !out.boostLocked && out.fuel > JETPACK.fuelEpsilon && out.mantleTarget === 0;
+  const thrustTime = out.boosting ? Math.min(dt, out.fuel * JETPACK.boostSeconds) : 0;
+  if (out.boosting) {
+    out.fuel = Math.max(0, out.fuel - thrustTime / JETPACK.boostSeconds);
+    if (out.fuel <= JETPACK.fuelEpsilon) { out.fuel = 0; out.boostLocked = true; }
+  }
   out.jumpHeld = input.jump;
   const oldY = out.y;
   const mantleTop = out.mantleTarget;
@@ -234,11 +247,16 @@ export function stepMotion(previous: Motion, input: Input, map: MapData, dt = TI
     out.grounded = out.y >= out.mantleTarget;
     if (out.grounded) out.mantleTarget = 0;
   } else {
-    out.vy -= tuning.gravity * dt;
+    out.vy = clamp(out.vy + (launching ? 0 : tuning.gravity * JETPACK.thrustGravityRatio * thrustTime) - tuning.gravity * dt,
+      -tuning.sprintSpeed * JETPACK.fallSprintRatio, tuning.sprintSpeed * JETPACK.ascentSprintRatio);
     out.y += out.vy * dt;
     out.grounded = false;
     const overBoard = onBoard(map, out.x, out.z);
     if (overBoard && oldY >= map.ground - .02 && out.y <= map.ground) { out.y = map.ground; out.vy = 0; out.grounded = true; }
+  }
+  const substrateBottom = map.ground - (rootMap.back?.thickness ?? .45);
+  if (out.vy > 0 && oldY + tuning.height <= substrateBottom + .01 && out.y + tuning.height >= substrateBottom && onBoard(map,out.x,out.z)) {
+    out.y = substrateBottom - tuning.height; out.vy = 0;
   }
   const candidates = nearby(map, Math.min(out.x, out.x + dx) - tuning.radius, Math.min(out.z, out.z + dz) - tuning.radius, Math.max(out.x, out.x + dx) + tuning.radius, Math.max(out.z, out.z + dz) + tuning.radius);
   if (mantleTop > 0 && out.mantleTarget === 0) {
@@ -260,17 +278,28 @@ export function stepMotion(previous: Motion, input: Input, map: MapData, dt = TI
       out.y = box.max[1]; out.vy = 0; out.grounded = true;
     }
   }
+  for (const box of candidates) {
+    if (out.vy > 0 && oldY+tuning.height <= box.min[1]+.01 && out.y+tuning.height >= box.min[1] && touches(out.x,out.z,box,tuning.radius)) {
+      out.y = Math.min(out.y,box.min[1]-tuning.height); out.vy = 0;
+    }
+  }
+  const intersectsSubstrate = (x: number,z: number) => out.y < map.ground-.01 && out.y+tuning.height > substrateBottom+.01 && onBoard(map,x,z);
   const tryX = out.x + dx;
   const tryZ = out.z + dz;
   if (input.jump && !out.grounded && out.mantleTarget === 0 && out.y >= map.ground + 1 && out.vy <= 2) {
-    const ledge = candidates.find(b => b.climbable && b.max[1] > out.y + .2 && b.max[1] - out.y <= tuning.mantleReach
+    const ledge = candidates.find(b => b.climbable && !(out.x > b.min[0] && out.x < b.max[0] && out.z > b.min[2] && out.z < b.max[2]) && b.max[1] > out.y + .2 && b.max[1] - out.y <= tuning.mantleReach
       && (touches(tryX, tryZ, b, tuning.radius) || touches(tryX, out.z, b, tuning.radius) || touches(out.x, tryZ, b, tuning.radius))
       && !candidates.some(other => other !== b && overlaps(out.x, b.max[1], out.z, other, tuning, stats)));
     if (ledge) { out.mantleTarget = ledge.max[1]; out.vy = 0; }
   }
-  if (!candidates.some(b => overlaps(tryX, out.y, out.z, b, tuning, stats))) out.x = tryX;
-  if (!candidates.some(b => overlaps(out.x, out.y, tryZ, b, tuning, stats))) out.z = tryZ;
+  if (!intersectsSubstrate(tryX,out.z) && !candidates.some(b => overlaps(tryX, out.y, out.z, b, tuning, stats))) out.x = tryX;
+  if (!intersectsSubstrate(out.x,tryZ) && !candidates.some(b => overlaps(out.x, out.y, tryZ, b, tuning, stats))) out.z = tryZ;
   if (out.y > oldY && out.mantleTarget === 0 && candidates.some(b => overlaps(out.x, out.y, out.z, b, tuning, stats))) { out.y = oldY; out.vy = 0; }
+  // Horizontal movement may have left the surface used by the vertical pass.
+  // Do not regenerate fuel on that first unsupported step off a ledge.
+  if (out.grounded && !(Math.abs(out.y-map.ground)<.02 && onBoard(map,out.x,out.z))
+    && !candidates.some(b => Math.abs(out.y-b.max[1])<.02 && touches(out.x,out.z,b,tuning.radius))) out.grounded=false;
+  if (out.grounded && !out.boosting) out.fuel = Math.min(1, out.fuel + dt / JETPACK.rechargeSeconds);
   return transitionEdge(out, rootMap, tuning);
 }
 
