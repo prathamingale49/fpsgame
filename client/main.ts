@@ -847,7 +847,7 @@ function frame(now: number) {
     scene.remove(shots[i].line); shots[i].line.geometry.dispose(); (shots[i].line.material as THREE.Material).dispose(); shots.splice(i, 1);
   }
   const width = innerWidth, height = innerHeight;
-  if (canvas.width !== Math.round(width * renderer.getPixelRatio()) || canvas.height !== Math.round(height * renderer.getPixelRatio())) { renderer.setSize(width, height, false); camera.aspect = width / height; camera.updateProjectionMatrix(); }
+  if (canvas.width !== Math.floor(width * renderer.getPixelRatio()) || canvas.height !== Math.floor(height * renderer.getPixelRatio())) { renderer.setSize(width, height, false); camera.aspect = width / height; camera.updateProjectionMatrix(); }
   const renderStart = performance.now(); renderer.render(scene, camera); renderCpuMs = performance.now() - renderStart;
   if (showDebug && now - fpsStart >= 500) {
     debug.textContent = `FPS ${(fpsFrames * 1000 / (now - fpsStart)).toFixed(0)}\nFrame ${lastFrameTime.toFixed(1)} ms\nRender CPU ${renderCpuMs.toFixed(1)} ms\nPing ${ping.toFixed(0)} ms\nCorrection ${correction.toFixed(3)} mm\nPlayer height ${playerTuning.height.toFixed(2)} mm\nJump apex ${(playerTuning.height * JUMP_HEIGHT_RATIO).toFixed(2)} mm\nCollision checks ${collisionChecks}\nPending inputs ${pending.length}\nCache queries ${collisionCacheStats(map).queries}\nGeometries ${renderer.info.memory.geometries} · Textures ${renderer.info.memory.textures}\nDraw calls ${renderer.info.render.calls}\nTriangles ${renderer.info.render.triangles}`;
