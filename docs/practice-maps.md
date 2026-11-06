@@ -1,6 +1,6 @@
 # Recovery and Vespula Flight SAM
 
-Solo Practice offers BMS (default), Recovery, and Vespula Flight SAM before joining. The HUD uses the selected board's title. Each room captures its own map; concurrent practice sessions cannot change one another or public rooms. Public rooms continue to use the existing BMS configuration.
+Solo Practice starts on BMS and offers Recovery and Vespula Flight SAM through the in-game MAPS sidebar (or M). The HUD uses the selected board's title. Each room captures its own map; concurrent practice sessions cannot change one another or public rooms. Multiplayer rooms select one of the three maps once, on creation, and keep that board for their lifetime.
 
 | Board | Width × depth (mm) | Substrate thickness (mm) | Front / back collision boxes | GLB |
 | --- | --- | --- | --- | --- |

@@ -1,4 +1,4 @@
-/** Available Solo Practice boards. Multiplayer uses the server's existing BMS map. */
+/** Boards available to Solo Practice and server-selected multiplayer rooms. */
 export const PRACTICE_MAPS = [
   { id: 'bms', title: 'BMS' },
   { id: 'recovery', title: 'Recovery' },

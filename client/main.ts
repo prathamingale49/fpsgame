@@ -14,16 +14,32 @@ import { mergeDamageNumber, damageNumberVisible, type DamageFeedback, type Damag
 const el = <T extends HTMLElement>(id: string) => document.getElementById(id) as T;
 document.title = 'YJSPS · YJSP';
 for (const brand of Array.from(document.querySelectorAll('.brand, .menu-card h1'))) brand.innerHTML = 'YJS<span>PS</span>';
-const practiceButton = document.createElement('button'); practiceButton.id = 'practice'; practiceButton.textContent = 'SOLO PRACTICE';
-el('create').parentElement!.after(practiceButton);
-const mapSelect = document.createElement('select'); mapSelect.id = 'practice-map';
-mapSelect.setAttribute('aria-label', 'Solo Practice map');
+const practiceButton = el<HTMLButtonElement>('practice');
+let selectedPracticeMap = 'bms';
+let switchingMap = false;
+const mapsButton = document.createElement('button'); mapsButton.id = 'maps-toggle'; mapsButton.textContent = 'MAPS'; mapsButton.hidden = true;
+mapsButton.setAttribute('aria-expanded', 'false'); mapsButton.setAttribute('aria-controls', 'maps-sidebar');
+const mapsSidebar = document.createElement('aside'); mapsSidebar.id = 'maps-sidebar'; mapsSidebar.hidden = true;
+mapsSidebar.innerHTML = '<header><strong>PRACTICE MAPS</strong><button id="maps-close" aria-label="Close maps">×</button></header><p>Choose a board. Targets reset when switching.</p><div id="map-options"></div><small>M · MAPS / ESC · CLOSE</small>';
+el('hud').append(mapsButton, mapsSidebar);
 for (const { id, title } of PRACTICE_MAPS) {
-  const option = document.createElement('option'); option.value = id; option.textContent = title; mapSelect.append(option);
+  const button = document.createElement('button'); button.dataset.mapId = id; button.textContent = title;
+  button.onclick = () => { void switchPracticeMap(id); }; el('map-options').append(button);
 }
-mapSelect.style.cssText = 'width:100%;margin-top:8px;padding:12px;background:#323332;color:#e0a500;border:1px solid #e0a500';
-practiceButton.before(mapSelect);
-practiceButton.style.cssText = 'width:100%;margin-top:8px;padding:15px;background:#323332;color:#e0a500;border:1px solid #e0a500;font-weight:700;cursor:pointer';
+function toggleMaps(open: boolean) {
+  mapsSidebar.hidden = !open; mapsButton.setAttribute('aria-expanded', String(open));
+  if (open) { document.exitPointerLock(); keys.clear(); mouseDown = false; cancelSpecial(); el('pause').classList.add('hidden'); }
+}
+mapsButton.onclick = () => toggleMaps(mapsSidebar.hidden);
+el('maps-close').onclick = () => toggleMaps(false);
+async function switchPracticeMap(id: string) {
+  if (!room?.state.practice || switchingMap) return;
+  if (map.id === id) { toggleMaps(false); return; }
+  switchingMap = true; selectedPracticeMap = id;
+  for (const button of Array.from(mapsSidebar.querySelectorAll('button'))) button.disabled = true;
+  try { document.exitPointerLock(); await room.leave(); clearSessionVisuals(); await connect('practice'); }
+  finally { switchingMap = false; for (const button of Array.from(mapsSidebar.querySelectorAll('button'))) button.disabled = false; }
+}
 const pickupPrompt = document.createElement('div'); pickupPrompt.id = 'pickup-prompt'; pickupPrompt.style.cssText = 'position:absolute;bottom:190px;width:100%;text-align:center;font:13px monospace;color:#ffcf4a;pointer-events:none'; el('hud').append(pickupPrompt);
 const weaponPickupModels = new Map<string, THREE.Group>();
 let nearbyWeapon: { id: string; version: number } | null = null, visualFireAt = 0;
@@ -142,13 +158,25 @@ const playCorrections: number[] = [];
 const gl = renderer.getContext(), debugRenderer = gl.getExtension('WEBGL_debug_renderer_info');
 const gpu = debugRenderer ? String(gl.getParameter(debugRenderer.UNMASKED_RENDERER_WEBGL)) : String(gl.getParameter(gl.RENDERER));
 let maxPending = 0, maxCorrection = 0;
+function sceneResources() {
+  const geometries = new Set<THREE.BufferGeometry>(), materials = new Set<THREE.Material>();
+  let objects = 0;
+  scene.traverse(object => {
+    objects++;
+    if (object instanceof THREE.Mesh || object instanceof THREE.Line) {
+      geometries.add(object.geometry);
+      for (const material of Array.isArray(object.material) ? object.material : [object.material]) materials.add(material);
+    }
+  });
+  return { objects, geometries: geometries.size, materials: materials.size };
+}
 (window as unknown as { __pcbPerf: () => unknown }).__pcbPerf = () => ({
   frameTimes: [...frameTimes], playCorrections: [...playCorrections], pending: pending.length, maxPending, correction, maxCorrection,
   renderer: { geometries: renderer.info.memory.geometries, textures: renderer.info.memory.textures, calls: renderer.info.render.calls, triangles: renderer.info.render.triangles },
-  gpu, mapId: map.id, authoritativeMapId: room?.state.mapId,
+  scene: sceneResources(), gpu, mapId: map.id, authoritativeMapId: room?.state.mapId,
   cache: collisionCacheStats(map), heapMB: ((performance as Performance & { memory?: { usedJSHeapSize: number } }).memory?.usedJSHeapSize ?? 0) / 1048576,
-  position: [local.x, local.y, local.z], authoritative: room?.state.players.get(room.sessionId) ? [room.state.players.get(room.sessionId)!.x, room.state.players.get(room.sessionId)!.y, room.state.players.get(room.sessionId)!.z] : null,
-  side: local.side ?? 'front', authoritativeSide: room?.state.players.get(room.sessionId)?.side,
+  position: [local.x, local.y, local.z], authoritative: room?.state?.players?.get(room.sessionId) ? [room.state.players!.get(room.sessionId)!.x, room.state.players!.get(room.sessionId)!.y, room.state.players!.get(room.sessionId)!.z] : null,
+  side: local.side ?? 'front', authoritativeSide: room?.state?.players?.get(room.sessionId)?.side,
   testRemaining: testMove?.remaining ?? 0,
   cameraRoll: camera.rotation.z, worldRotation: world.rotation.x,
   flipCooldown: local.flipCooldown ?? 0, orbitProgress: boardFlip?.progress ?? null, cameraPosition: camera.position.toArray(), cameraQuaternion: camera.quaternion.toArray(),
@@ -161,6 +189,22 @@ function boxMesh(box: { min: number[]; max: number[]; name?: string }, mat: THRE
   const mesh = new THREE.Mesh(new THREE.BoxGeometry(size.x, size.y, size.z), mat);
   mesh.position.set((box.min[0] + box.max[0]) / 2, (box.min[1] + box.max[1]) / 2, (box.min[2] + box.max[2]) / 2);
   mesh.castShadow = false; mesh.receiveShadow = true; return mesh;
+}
+function clearSessionVisuals() {
+  snapshot = null; pending = []; keys.clear(); mouseDown = false; boardFlip = null;
+  for (const entry of remotes.values()) {
+    scene.remove(entry.mesh, entry.healthBar);
+    entry.mesh.traverse(obj => { if (obj instanceof THREE.Mesh) obj.geometry.dispose(); });
+    entry.healthBar.traverse(obj => { if (obj instanceof THREE.Mesh) { obj.geometry.dispose(); (obj.material as THREE.Material).dispose(); } });
+  }
+  remotes.clear();
+  for (const helper of npcHitboxes.values()) { scene.remove(helper); helper.dispose(); } npcHitboxes.clear();
+  for (const mesh of spoolMeshes.values()) { scene.remove(mesh); mesh.traverse(obj => { if (obj instanceof THREE.Mesh) { obj.geometry.dispose(); if (obj.material !== dark) (obj.material as THREE.Material).dispose(); } }); } spoolMeshes.clear();
+  for (const mesh of weaponPickupModels.values()) { scene.remove(mesh); disposeWeaponModel(mesh.userData.weaponModel); mesh.traverse(obj => { if (obj instanceof THREE.Mesh && obj.geometry.type === 'CircleGeometry') { obj.geometry.dispose(); (obj.material as THREE.Material).dispose(); } }); } weaponPickupModels.clear();
+  for (const shot of shots) { scene.remove(shot.line); shot.line.geometry.dispose(); (shot.line.material as THREE.Material).dispose(); } shots.length = 0; predictedTracers.clear();
+  for (const number of damageNumbers) number.element.remove(); damageNumbers.length = 0;
+  airCone.visible = false; showNpcHitboxes = false; specialHeld = false; adsHeld = false; fullChargeCue = false;
+  el('kill-feed').replaceChildren(); el('hitmarker').classList.add('hidden'); el('damage-flash').style.opacity = '0';
 }
 function buildMap(data: MapData) {
   world.traverse(object => {
@@ -203,7 +247,8 @@ function buildMap(data: MapData) {
     }
   }
   if (map.texture && !map.surface) {
-    new THREE.TextureLoader().load(map.texture, texture => {
+    new THREE.TextureLoader().load(data.texture!, texture => {
+      if (map !== data) { texture.dispose(); return; }
       texture.colorSpace = THREE.SRGBColorSpace;
       texture.anisotropy = Math.min(4, renderer.capabilities.getMaxAnisotropy());
       const art = new THREE.Mesh(new THREE.PlaneGeometry(map.width, map.depth), new THREE.MeshBasicMaterial({ map: texture, polygonOffset: true, polygonOffsetFactor: -2 }));
@@ -238,9 +283,9 @@ function buildMap(data: MapData) {
         const materials = Array.isArray(object.material) ? object.material : [object.material];
         for (const material of materials) if (material.transparent && material.opacity < .5) { material.opacity = .035; material.depthWrite = false; }
       });
-      if (map !== data) return;
+      if (map !== data) { gltf.scene.traverse(obj => { if (obj instanceof THREE.Mesh) { obj.geometry.dispose(); for (const material of Array.isArray(obj.material) ? obj.material : [obj.material]) material.dispose(); } }); return; }
       world.add(gltf.scene); canvas.dataset.modelLoaded = 'true';
-    }, undefined, error => { console.error('PCB model load failed', error); canvas.dataset.modelLoaded = 'error'; map.boxes.forEach(box => world.add(boxMesh(box, dark))); addBackFallback(); });
+    }, undefined, error => { if (map !== data) return; console.error('PCB model load failed', error); canvas.dataset.modelLoaded = 'error'; map.boxes.forEach(box => world.add(boxMesh(box, dark))); addBackFallback(); });
   }
 }
 buildMap(map);
@@ -474,12 +519,15 @@ async function connect(mode: 'play' | 'create' | 'join' | 'reconnect' | 'practic
     if (health.movementProtocol !== MOVEMENT_PROTOCOL) throw new Error('Game server version differs from this page. Restart the server and refresh.');
     devScaleEnabled = health.devScaleEnabled === true;
     const token = sessionStorage.getItem('pcb-reconnection-token');
-    const options = { name, protocol: MOVEMENT_PROTOCOL, ...(mode === 'practice' ? { mapId: mapSelect.value } : {}) };
+    const options = { name, private: mode === 'create', protocol: MOVEMENT_PROTOCOL, ...(mode === 'practice' ? { mapId: selectedPracticeMap } : {}) };
     room = mode === 'practice' ? await client.create<MatchState>('practice', options) : mode === 'reconnect' && token ? await client.reconnect<MatchState>(token) : mode === 'join' ? await client.joinById<MatchState>(code, options) : mode === 'create' ? await client.create<MatchState>('pcb', options) : await client.joinOrCreate<MatchState>('pcb', options);
+    if (!room.state?.players?.has(room.sessionId)) await new Promise<void>(resolve => room!.onStateChange.once(() => resolve()));
     const me = room.state?.players?.get(room.sessionId);
     pending = []; lastSentInput = null; nextInputAt = performance.now(); seq = me?.ack ?? 0; yaw = me?.yaw ?? 0; pitch = me?.pitch ?? 0;
-    const response = await fetch(mode === 'practice' ? `/api/map?practiceMap=${encodeURIComponent(mapSelect.value)}` : '/api/map');
-    if (response.ok) buildMap(await response.json() as MapData);
+    const response = await fetch(`/api/map?mapId=${encodeURIComponent(room.state.mapId)}`);
+    if (!response.ok) throw new Error('Could not load the room map.');
+    buildMap(await response.json() as MapData);
+    el('kill-feed').replaceChildren();
     el('map-name').textContent = map.title.toUpperCase();
     el('room-label').textContent = `ROOM ${room.roomId} · COPY LINK`;
     el('room-label').style.pointerEvents = 'auto'; el('room-label').style.cursor = 'pointer';
@@ -512,20 +560,25 @@ async function connect(mode: 'play' | 'create' | 'join' | 'reconnect' | 'practic
     room.onMessage('pickup', (msg: { player: string; amount: number }) => { if (msg.player === room?.sessionId) { showFeed(`+${msg.amount} solder rounds`); sound(710, .16, 'sine'); } });
     room.onDrop(() => { recordMovement('drop', me?.ack ?? 0); mouseDown = false; pending = []; lastSentInput = null; showFeed('Connection lost · reconnecting'); });
     room.onReconnect(() => { const ack = room!.state.players.get(room!.sessionId)?.ack ?? seq; recordMovement('reconnect', ack); pending = []; lastSentInput = null; seq = ack; serverClockOffsetMs = NaN; sessionStorage.setItem('pcb-reconnection-token', room!.reconnectionToken); syncState(room!.state); showFeed('Connection restored'); });
-    room.onLeave(() => { clearElimination(); sessionStorage.removeItem('pcb-reconnection-token'); room = null; scalePanel.hidden = true; el('menu').classList.remove('hidden'); el('hud').classList.add('hidden'); document.exitPointerLock(); showFeed('Disconnected from room'); });
+    const joinedRoom = room;
+    room.onLeave(() => { if (room !== joinedRoom) return; toggleMaps(false); mapsButton.hidden = true; clearSessionVisuals(); clearElimination(); sessionStorage.removeItem('pcb-reconnection-token'); room = null; scalePanel.hidden = true; el('menu').classList.remove('hidden'); el('hud').classList.add('hidden'); document.exitPointerLock(); showFeed('Disconnected from room'); });
     sessionStorage.setItem('pcb-reconnection-token', room.reconnectionToken);
     if (room.state?.players) syncState(room.state);
     clearElimination();
     visualSide = local.side ?? 'front'; boardFlip = null; renderedHeading = local.headingOffset ?? 0;
+    toggleMaps(false); mapsButton.hidden = !room.state.practice;
+    for (const button of Array.from(el('map-options').querySelectorAll('button'))) button.setAttribute('aria-pressed', String(button.dataset.mapId === map.id));
     el('menu').classList.add('hidden'); el('hud').classList.remove('hidden');
     if (devScaleEnabled) showFeed('DEV SCALE enabled · press F4 to adjust height');
     if (mode === 'reconnect') el('pause').classList.remove('hidden'); else void canvas.requestPointerLock();
   } catch (error) { if (mode === 'reconnect') sessionStorage.removeItem('pcb-reconnection-token'); el('error').textContent = error instanceof Error ? error.message : String(error); }
 }
 el('play').onclick = () => connect('play'); el('create').onclick = () => connect('create'); el('join').onclick = () => connect('join');
-practiceButton.onclick = () => connect('practice');
+practiceButton.onclick = () => { selectedPracticeMap = 'bms'; void connect('practice'); };
 document.addEventListener('keydown', e => {
   if (!room?.state.practice || e.repeat) return;
+  if (e.code === 'KeyM') { e.preventDefault(); toggleMaps(mapsSidebar.hidden); }
+  if (e.code === 'Escape' && !mapsSidebar.hidden) toggleMaps(false);
   if (e.code === 'F5') { e.preventDefault(); showNpcHitboxes = !showNpcHitboxes; showFeed(`NPC HITBOXES ${showNpcHitboxes ? 'ON' : 'OFF'}`); }
   if (e.code === 'F6') { e.preventDefault(); room.send('practice:movement'); }
 });
@@ -561,7 +614,7 @@ document.addEventListener('mouseup', e => {
   if (specialHeld && currentWeapon().id === 'iron') { room?.send('weapon:trigger', { action: 'release', shot: weaponShot() }); specialHeld = false; fullChargeCue = false; gunView.position.z = -.15; sound(130, .12); }
   else cancelSpecial();
 });
-document.addEventListener('pointerlockchange', () => { el('pause').classList.toggle('hidden', !room || document.pointerLockElement === canvas); keys.clear(); mouseDown = false; });
+document.addEventListener('pointerlockchange', () => { el('pause').classList.toggle('hidden', !room || !mapsSidebar.hidden || document.pointerLockElement === canvas); keys.clear(); mouseDown = false; });
 window.addEventListener('blur', () => { keys.clear(); mouseDown = false; });
 window.addEventListener('blur', cancelSpecial);
 document.addEventListener('visibilitychange', () => { if (document.hidden) { mouseDown = false; cancelSpecial(); } });
@@ -581,7 +634,7 @@ setInterval(() => {
   if (p.weapon !== 'iron' && p.weapon !== 'air') return;
   room.send('weapon:trigger', { action: p.triggerHeld ? 'aim' : 'start', shot: weaponShot() }); specialHeld = true;
 }, 100);
-el('pause').onclick = e => { if ((e.target as HTMLElement).id !== 'leave') canvas.requestPointerLock(); };
+el('pause').onclick = e => { if (mapsSidebar.hidden && (e.target as HTMLElement).id !== 'leave') canvas.requestPointerLock(); };
 
 let previous = performance.now();
 setInterval(() => {

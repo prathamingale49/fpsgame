@@ -1,5 +1,6 @@
 export const TICK = 1 / 60;
-export const MOVEMENT_PROTOCOL = 7;
+// Older clients assume BMS for every multiplayer room.
+export const MOVEMENT_PROTOCOL = 8;
 export const EDGE_FLIP_SECONDS = .9;
 export const FLIP_COOLDOWN_SECONDS = 5;
 export const MATCH_SECONDS = 300;
@@ -37,12 +38,23 @@ export type Spawn = [number, number, number];
 export type BoardSide = 'front' | 'back';
 export type BoardBack = { boxes: Box[]; thickness: number; enabled: boolean };
 export type MapData = { id: string; title: string; width: number; depth: number; ground: number; surface?: number[]; backTexture?: string; boardColor?: string; flipEdges?: number[][]; boxes: Box[]; spawns: Spawn[]; back?: BoardBack; model?: string; texture?: string; components?: { ref: string; x: number; z: number; rotation: number; layer: string }[] };
+const floorIndices = new WeakMap<MapData, Map<string, number[]>>();
 // Triangulated STEP substrate top, including its outline and cutouts.
 export function onBoard(map: MapData, x: number, z: number, side: BoardSide = 'front'): boolean {
   if (side === 'back') z = -z;
   if (!map.surface) return Math.abs(x) <= map.width / 2 && Math.abs(z) <= map.depth / 2;
   const t = map.surface;
-  for (let i = 0; i < t.length; i += 6) {
+  let cells = floorIndices.get(map);
+  if (!cells) {
+    cells = new Map();
+    for (let i=0;i<t.length;i+=6) {
+      const x0=Math.floor(Math.min(t[i],t[i+2],t[i+4])/8), x1=Math.floor(Math.max(t[i],t[i+2],t[i+4])/8);
+      const z0=Math.floor(Math.min(t[i+1],t[i+3],t[i+5])/8), z1=Math.floor(Math.max(t[i+1],t[i+3],t[i+5])/8);
+      for(let ix=x0;ix<=x1;ix++) for(let iz=z0;iz<=z1;iz++) { const key=`${ix},${iz}`, list=cells.get(key) ?? []; list.push(i); cells.set(key,list); }
+    }
+    floorIndices.set(map,cells);
+  }
+  for (const i of cells.get(`${Math.floor(x/8)},${Math.floor(z/8)}`) ?? []) {
     if (x < Math.min(t[i],t[i+2],t[i+4]) || x > Math.max(t[i],t[i+2],t[i+4]) || z < Math.min(t[i+1],t[i+3],t[i+5]) || z > Math.max(t[i+1],t[i+3],t[i+5])) continue;
     const cross = (a: number, b: number, c: number, d: number) => (x-a)*(d-b)-(z-b)*(c-a);
     const a = cross(t[i],t[i+1],t[i+2],t[i+3]), b = cross(t[i+2],t[i+3],t[i+4],t[i+5]), c = cross(t[i+4],t[i+5],t[i],t[i+1]);

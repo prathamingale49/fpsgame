@@ -11,6 +11,9 @@ export const DEV_SCALE_ENABLED = process.env.PCB_DEV_SCALE === '1' && process.en
 type Runtime = { queue: Map<number, Input>; lastReceived: number; lastSeq: number; credit: number; lastShot: number; lastShotId: number; reloadAt: number; respawnAt: number };
 export let activeMap: MapData = testMap;
 export function setActiveMap(map: MapData) { activeMap = map; }
+let multiplayerMaps: MapData[] = [];
+export function setMultiplayerMaps(maps: MapData[]) { multiplayerMaps = [...maps]; }
+export function chooseMultiplayerMap(random = Math.random): MapData { return multiplayerMaps.length ? multiplayerMaps[Math.floor(random() * multiplayerMaps.length)] : activeMap; }
 export const practiceMaps = new Map<string, MapData>();
 export function registerPracticeMap(map: MapData) { practiceMaps.set(map.id, map); }
 export const serverPerf = { ticks: 0, tickMsTotal: 0, tickMsMax: 0, queueMax: 0, queueTotal: 0, processed: 0, cache: () => collisionCacheStats(activeMap) };
@@ -60,9 +63,10 @@ export class GameRoom extends Room {
   private readonly pickupSeconds = Number(process.env.PCB_TEST_PICKUP_SECONDS || WEAPON.pickupRespawnSeconds);
   private playerTuning: PlayerTuning = PLAYER;
 
-  onCreate(options: { mapId?: string } = {}) {
-    this.map = this.practice ? practiceMaps.get(options.mapId ?? "bms") ?? activeMap : activeMap;
+  onCreate(options: { mapId?: string; private?: boolean } = {}) {
+    this.map = this.practice ? practiceMaps.get(options.mapId ?? "bms") ?? activeMap : chooseMultiplayerMap();
     this.state.practice = this.practice;
+    if (!this.practice && options.private === true) void this.setPrivate(true);
 
     if (!this.practice) weaponPickupLocations(this.map, Math.floor(Math.random() * 0xffffffff)).forEach((point, index) => this.state.weaponPickups.set(String(index), new WeaponPickupState({ ...point, weapon: index >= 9 ? 'sniper' : (['iron', 'air', 'pump'] as const)[index % 3] })));
     if (this.practice) { this.maxClients = 1; void this.setPrivate(true); }

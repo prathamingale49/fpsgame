@@ -30,7 +30,7 @@ try {
   catch { throw new Error(`Initial join failed: ${await a.locator('#error').textContent()} browser=${errors.join(' | ')} server=${serverLogs.join(' | ')}`); }
   const code = (await a.locator('#room-label').textContent())?.match(/ROOM ([A-Z0-9]+)/)?.[1];
   if (!code) throw new Error('Room code missing');
-  await b.locator('#name').fill('Browser B'); await b.locator('#code').fill(code); await b.locator('#join').click();
+  await b.locator('#name').fill('Browser B'); await b.locator('.join-details summary').click(); await b.locator('#code').fill(code); await b.locator('#join').click();
   await Promise.all([a.locator('#player-count').getByText('2 / 8 PLAYERS').waitFor(), b.locator('#player-count').getByText('2 / 8 PLAYERS').waitFor()]);
   await Promise.all([a.locator('#game[data-model-loaded="true"]').waitFor({ timeout: 30000 }), b.locator('#game[data-model-loaded="true"]').waitFor({ timeout: 30000 })]);
   await delay(500);

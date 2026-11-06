@@ -24,7 +24,7 @@ try {
   await a.locator('#hud:not(.hidden)').waitFor({ timeout: 30000 });
   const code = (await a.locator('#room-label').textContent())?.match(/ROOM ([A-Z0-9]+)/)?.[1];
   for (let i = 1; i < players; i++) {
-    await pages[i].locator('#code').fill(code!); await pages[i].locator('#join').click();
+    await pages[i].locator('.join-details summary').click(); await pages[i].locator('#code').fill(code!); await pages[i].locator('#join').click();
     await pages[i].locator('#hud:not(.hidden)').waitFor({ timeout: 30000 });
   }
   await a.locator('#game[data-model-loaded="true"]').waitFor({ timeout: 60000 });

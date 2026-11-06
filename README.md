@@ -1,14 +1,14 @@
 # YJSPS
 
-Solo Practice is an unrestricted weapon sandbox with all four guns available using **1–4**. It has five rocket targets and remains private and untimed. **R** reloads; **F5** toggles target hitboxes and **F6** freezes NPCs.
+Solo Practice is an unrestricted weapon sandbox with all five guns available using **1–5**. It has five rocket targets and remains private and untimed. Use **MAPS** on the left or **M** to switch between BMS, Recovery, and Vespula Flight SAM inside practice. **R** reloads; **F5** toggles target hitboxes and **F6** freezes NPCs.
 
-Normal multiplayer starts every player with the **Solder Blaster** and randomly spawns nine special weapon pickups (three Precision Irons, three Hot Air Rework Guns, and three Desoldering Pumps) across clear, accessible areas of the PCB. The pickups are spread apart rather than clustered, including both PCB surfaces. Press **E** near a floating pickup to collect or replace the one carried special weapon; press **Q** to swap between the permanent Blaster and that special. Pickups respawn after 15 seconds, and death clears the carried special. Weapon locations vary between matches/rooms.
+Normal multiplayer starts every player with the **Solder Blaster** and randomly spawns eleven special weapon pickups (three Precision Irons, three Hot Air Rework Guns, three Desoldering Pumps, and two Capacitor Snipers) across clear, accessible areas of the PCB. The pickups are spread apart rather than clustered, including both PCB surfaces. Press **E** near a floating pickup to collect or replace the one carried special weapon; press **Q** to swap between the permanent Blaster and that special. Pickups respawn after 15 seconds, and death clears the carried special. Weapon locations vary between matches/rooms.
 
-The four weapons have distinct procedural models and animations: Blaster recoil/heated barrel, charged Iron pullback and violet coils, Hot Air turbine/heat glow, and Pump plunger action. Iron charges while held; Hot Air uses a short-range cone and can overheat; Pump fires eight pellets. Weapon selection, damage, charges, cooling, cooldowns, reloads, and pickups are server-validated for multiplayer. Weapon animation does not alter bullet aim.
+The five weapons have distinct procedural models and animations: Blaster recoil/heated barrel, charged Iron pullback and violet coils, Hot Air turbine/heat glow, and Pump plunger action. Iron charges while held; Hot Air uses a short-range cone and can overheat; Pump fires eight pellets. Weapon selection, damage, charges, cooling, cooldowns, reloads, and pickups are server-validated for multiplayer. Weapon animation does not alter bullet aim.
 
-Browser first-person deathmatch on a real YJSP Battery Management System (BMS) PCB. The frontend uses Three.js and Vite; a Colyseus/Node.js server owns player movement, collisions, weapons, and multiplayer game state.
+Browser first-person deathmatch on real YJSP BMS, Recovery, and Vespula Flight SAM PCBs. The frontend uses Three.js and Vite; a Colyseus/Node.js server owns player movement, collisions, weapons, and multiplayer game state.
 
-The repository includes the YJSP BMS source files and generated map, so a fresh clone starts with the real PCB. The prototype map remains available as a fallback when no generated map is present.
+The repository includes all three source assemblies and generated maps. New multiplayer rooms select one of the three boards with equal probability, and keep that map through joins, reconnections, and round resets. The prototype map remains available as a fallback when no generated map is present.
 
 ## 1. Install prerequisites
 
@@ -78,9 +78,9 @@ Both commands start the frontend and server together; you do not need separate t
 | http://localhost:5173 | **Open this in your browser to play** (Vite frontend) |
 | http://localhost:2567/api/health | Server health and active map information (JSON) |
 
-In the browser, enter a name and click **Create Room** or **Play Now**. You can run around and test jumping with one person; a timed deathmatch starts when two players join. Use **Join Room** and the room code to connect a second player. Each room supports up to eight players.
+In the browser, enter a name and click **PLAY NOW** for public matchmaking or **Create Private Room** for an invite-only room. You can run around and test jumping with one person; a timed deathmatch starts when two players join. Expand **Join Room by Code** and use the room code to connect a second player. Each room supports up to eight players.
 
-The checked-in BMS map loads automatically. If it is missing, the game uses the prototype circuit; step 5 explains regeneration.
+The checked-in maps load automatically. Solo Practice starts on BMS; its in-game MAPS sidebar switches boards and resets the targets. Multiplayer selects its map on the server when the room is created.
 
 ### Development player-scale slider
 

@@ -43,7 +43,7 @@ try {
   await pages[0].locator('#hud:not(.hidden)').waitFor({ timeout: 30000 });
   const code = (await pages[0].locator('#room-label').textContent())?.match(/ROOM ([A-Z0-9]+)/)?.[1];
   if (!code) throw new Error('Room code missing');
-  await pages[1].locator('#name').fill('Soak B'); await pages[1].locator('#code').fill(code); await pages[1].locator('#join').click();
+  await pages[1].locator('#name').fill('Soak B'); await pages[1].locator('.join-details summary').click(); await pages[1].locator('#code').fill(code); await pages[1].locator('#join').click();
   await Promise.all(pages.map(page => page.locator('#game[data-model-loaded="true"]').waitFor({ timeout: 90000 })));
   for (const page of pages) {
     await page.evaluate(() => (window as unknown as { __pcbStartSoak: () => void }).__pcbStartSoak());

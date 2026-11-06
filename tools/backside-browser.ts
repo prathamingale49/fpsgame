@@ -28,7 +28,7 @@ try {
       catch { throw new Error(`Join failed: ${await a.locator('#error').textContent()} errors=${errors} server=${logs}`); }
       const code = (await a.locator('#room-label').textContent())?.match(/ROOM ([A-Z0-9]+)/)?.[1];
       if (!code) throw new Error('Missing room code');
-      await b.locator('#code').fill(code); await b.locator('#join').click();
+      await b.locator('.join-details summary').click(); await b.locator('#code').fill(code); await b.locator('#join').click();
       await b.locator('#hud:not(.hidden)').waitFor();
       await a.locator('#game[data-model-loaded="true"]').waitFor({ timeout: 60000 });
       const start = async (testYaw: number, ticks = 18) => a.evaluate(({ y, ticks }) => (window as any).__pcbStartMovementTest(ticks, y), { y: testYaw, ticks });
